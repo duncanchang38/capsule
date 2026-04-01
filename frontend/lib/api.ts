@@ -1,7 +1,19 @@
+function getSessionId(): string {
+  let id = sessionStorage.getItem("capsule-session-id");
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem("capsule-session-id", id);
+  }
+  return id;
+}
+
 export async function* streamChat(content: string): AsyncGenerator<string> {
   const res = await fetch("/api/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Session-ID": getSessionId(),
+    },
     body: JSON.stringify({ content }),
   });
 

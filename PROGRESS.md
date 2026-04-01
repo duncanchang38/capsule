@@ -1,7 +1,7 @@
 # Capsule — Progress
 
 ## Current Status
-Both servers running. Next.js frontend + FastAPI backend wired end-to-end. Claude responding via Agent SDK.
+Intent classifier built and tested. 5-bucket taxonomy (todo/calendar/to_know/to_learn/idea) + inbox fallback. State machine live. 29 tests passing.
 
 ---
 
@@ -29,11 +29,25 @@ npm run dev
 capsule/
 ├── backend/
 │   └── app/
-│       ├── main.py              ← FastAPI entry, CORS, router registration
+│       ├── main.py              ← FastAPI entry, lifespan, CLAUDE_PLUGIN_ROOT check, db.init()
 │       ├── routes/
-│       │   └── chat.py          ← POST /chat SSE endpoint
-│       └── agents/
-│           └── capsule.py       ← Claude Agent SDK streaming logic
+│       │   └── chat.py          ← POST /chat SSE + state machine (AWAITING_CAPTURE/CONFIRMATION/CLASSIFICATION)
+│       ├── agents/
+│       │   ├── capsule.py       ← (legacy, kept for reference)
+│       │   ├── responder.py     ← Claude Agent SDK streaming (renamed from capsule.py)
+│       │   ├── classifier.py    ← classify_intent() via anthropic SDK → ClassificationResult
+│       │   └── bucket_session.py ← BucketSession.store() → SQLite + ack string
+│       └── storage/
+│           └── db.py            ← init(), save_capture(), get_recent()
+│   ├── data/
+│   │   └── capsule.db           ← SQLite (in .gitignore)
+│   ├── tests/
+│   │   ├── test_classifier.py   ← 11 unit tests
+│   │   ├── test_db.py           ← 7 unit tests
+│   │   ├── test_bucket_session.py ← 3 unit tests
+│   │   └── test_chat.py         ← 8 integration tests (state machine)
+│   ├── requirements.txt         ← fastapi==0.115.12, anthropic, pytest, pytest-asyncio, httpx
+│   └── pytest.ini
 ├── frontend/
 │   ├── app/
 │   │   └── page.tsx             ← Main chat page
@@ -116,6 +130,14 @@ User experienced the core product pain live — captured 4 items (YC app + 3 res
 **Gotchas:**
 - `bun` not in PATH during shell execution — `gstack-review-log` validator fails silently; wrote to review log directly
 - Retry loop must pass `correction_hint` to classifier — same text re-sent produces same result
+
+**Taxonomy revision (Session 6 /plan-ceo-review):**
+- Revised to **5 buckets + inbox fallback**: `todo`, `calendar`, `to_know`, `to_learn`, `idea`, `inbox`
+- `to_learn` added: content/skill to consume — distinct from `todo` (completion output = absorbed knowledge, not just "done")
+- `inbox` added: classifier fallback when confidence < 0.4 — holds item for manual re-classification, no permanent storage write
+- `idea` confirmed as personal KB foundation — persists, feeds v2 briefing/compile feature
+- CEO plan written to `~/.gstack/projects/duncanchang38-capsule/ceo-plans/2026-04-02-taxonomy.md`
+- Design doc updated at `~/.gstack/projects/duncanchang38-capsule/duncan-main-design-20260402-000331.md`
 
 **Next:** Build the classifier. Implementation order: Storage → Classifier (parallel) → Bucket session → State machine → Tests
 
