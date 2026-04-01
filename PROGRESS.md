@@ -80,4 +80,26 @@ uvicorn server:app --reload
 
 ---
 
-## Last Session: 2026-04-01
+## Session Log
+
+### 2026-04-01
+**Completed:**
+- Built FastAPI backend (`server.py`) with SSE streaming endpoint
+- Built ChatGPT-style dark theme chat UI (`index.html`) — streaming, auto-expanding textarea, Enter to send
+- Created `IDEA.md` with full concept, all 7 use cases, architecture notes, open questions
+- Created `PROGRESS.md` and `CLAUDE.md` (session end protocol)
+- Moved rules to `.claude/rules/session.md` following proper Claude Code structure
+- Created GitHub repo `duncanchang38/capsule` and pushed
+- Set up `gh` CLI and configured git credentials for future pushes
+
+**In Progress:**
+- Backend is placeholder echo only — Claude Agent SDK not yet wired in
+
+**Next:**
+- Wire `query()` from claude-agent-sdk into `server.py` so input goes to Claude
+- Then: intent classifier → bucket routing → storage → tabs UI
+
+**Gotchas:**
+- `.venv/` is not gitignored yet — add a `.gitignore` next session
+- `__pycache__/` is being committed — add to `.gitignore` too
+- Server must be started manually each session: `uvicorn server:app --reload`
