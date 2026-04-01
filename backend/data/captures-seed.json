@@ -1,0 +1,34 @@
+[
+  {
+    "bucket": "todo",
+    "summary": "Apply to Y Combinator",
+    "content": "Interested in applying to YC — need to find time to fill out the application",
+    "metadata": { "deadline": null, "priority": "normal", "url": "https://ycombinator.com/apply?ref=gstack" },
+    "status": "active",
+    "created_at": "2026-04-02"
+  },
+  {
+    "bucket": "to_know",
+    "summary": "Read: How to Get Startup Ideas (Paul Graham)",
+    "content": "PG essay on startup ideas — ~20 min read",
+    "metadata": { "question": "How do the best startup ideas actually emerge?", "topic": "startups", "url": "https://paulgraham.com/startupideas.html" },
+    "status": "active",
+    "created_at": "2026-04-02"
+  },
+  {
+    "bucket": "to_know",
+    "summary": "Watch: Launch Sooner Than You Think (Tyler Bosmeny, YC)",
+    "content": "12 min video on why founders wait too long to ship",
+    "metadata": { "question": "When should I launch?", "topic": "startups", "url": "https://www.youtube.com/watch?v=Nsx5RDVKZSk" },
+    "status": "active",
+    "created_at": "2026-04-02"
+  },
+  {
+    "bucket": "to_know",
+    "summary": "Watch: The New Way to Build a Startup (Garry Tan)",
+    "content": "8 min video on AI-leverage and tiny teams beating incumbents",
+    "metadata": { "question": "How do small teams build big things with AI?", "topic": "startups", "url": "https://www.youtube.com/watch?v=rWUWfj_PqmM" },
+    "status": "active",
+    "created_at": "2026-04-02"
+  }
+]

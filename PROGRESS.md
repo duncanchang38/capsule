@@ -92,6 +92,49 @@ capsule/
 
 ## Session Log
 
+### 2026-04-02 (Session 5)
+**Completed:**
+- Ran `/office-hours` — full startup diagnostic (gstack onboarding: telemetry, proactive, routing rules)
+- Added gstack skill routing rules to `capsule/CLAUDE.md`
+- Produced approved design doc: intent classifier (Approach B+C) at `~/.gstack/projects/duncanchang38-capsule/duncan-main-design-20260402-000331.md`
+- Ran `/plan-eng-review` — full architecture + code quality + test + performance review
+- Saved 4 captured items to `backend/data/captures-seed.json` (YC application + 3 resources to read)
+- Created `TODOS.md` with bucket query and tabs UI deferred items
+
+**Key design decisions:**
+- Classifier uses `anthropic` SDK directly (not Agent SDK — wrong tool for structured JSON)
+- `capsule.py` → `responder.py`
+- Typed metadata with `model_validator` using `bucket` as discriminator
+- `classify_intent(text, correction_hint=None)` — retries pass correction context
+- 2000-char input limit at route level
+- Session TTL: `_sessions` pruned after 1 hour idle
+- Tests ship with feature: pytest + pytest-asyncio + 2 Playwright E2E
+
+**Real insight this session:**
+User experienced the core product pain live — captured 4 items (YC app + 3 resources) with no good place to store them that connects to actual schedule/calendar. The product's true value is the **staging layer** between "I want to do this" and "this is on my schedule." Not just classification into buckets — routing to real time.
+
+**Gotchas:**
+- `bun` not in PATH during shell execution — `gstack-review-log` validator fails silently; wrote to review log directly
+- Retry loop must pass `correction_hint` to classifier — same text re-sent produces same result
+
+**Next:** Build the classifier. Implementation order: Storage → Classifier (parallel) → Bucket session → State machine → Tests
+
+### 2026-04-01 (Session 4)
+**Completed:**
+- Incorporated gstack (Garry Tan / YC sprint workflow toolkit) into the project
+- Installed bun (required runtime for gstack)
+- Global install: `~/.claude/skills/gstack` with all 34 skills linked
+- Vendored gstack into project repo: `capsule/.claude/skills/gstack`
+- Created `~/.claude/CLAUDE.md` with gstack skill registration
+- Updated `capsule/CLAUDE.md` with gstack section
+- Updated `setup-log.md` with full gstack setup instructions
+
+**Gotchas:**
+- bun must be in PATH (`export PATH="$HOME/.bun/bin:$PATH"`) when running `./setup`
+- Restart Claude Code after setup — skills are discovered at startup only
+
+**Next:** Restart Claude Code, then run `/office-hours` before building intent classifier
+
 ### 2026-04-01 (Session 1)
 **Completed:** FastAPI server + SSE streaming, ChatGPT-style HTML/JS chat UI, IDEA.md, GitHub repo created and pushed, gh CLI set up, `.gitignore` added.
 **Gotchas:** `.venv/` and `__pycache__/` were being committed before `.gitignore` was added.
