@@ -1,41 +1,35 @@
-# Capsule — Project Rules
+# Session Protocol
 
-## Session End Protocol
+## Session End
 
-When I say "done", "bye", "wrapping up", "stopping for now", or anything indicating I'm ending the session:
+Triggers: "done", "bye", "wrapping up", "stopping for now", "end session", or anything indicating the session is ending.
 
-1. Update `PROGRESS.md` with:
-   - Date/time
+1. Append a new entry to the `## Session Log` section of `PROGRESS.md`:
+   - Date (YYYY-MM-DD)
    - What was completed this session
    - What's in progress
    - What's next
-   - Any important context or gotchas
+   - Any gotchas or important context
 
-2. Stage and commit all changes:
+2. Commit and push:
    ```bash
    git add -A
-   git commit -m "session: <one-line summary of what was done>"
-   ```
-
-3. Push to GitHub:
-   ```bash
+   git commit -m "session: <one-line summary>"
    git push origin main
    ```
 
-4. Confirm everything is saved and pushed.
+3. Confirm saved and pushed.
 
 ---
 
-## Project Status
+## Manual Sync
 
-See `PROGRESS.md` for full details.
+Triggers: "update docs", "sync docs", or "update progress"
 
-**Current focus:** Wire Claude Agent SDK into `server.py` to replace the echo placeholder.
-
-**Stack:** Python · FastAPI · claude-agent-sdk · plain HTML/JS frontend
-
-**Run locally:**
-```bash
-uvicorn server:app --reload
-# open http://localhost:8000
-```
+1. Read current source files to get actual state
+2. Update `PROGRESS.md`:
+   - Current status line
+   - Folder structure snapshot
+   - Architecture decisions (append new ones, don't remove old)
+   - What's pending (reorder based on current state)
+3. Report what changed
