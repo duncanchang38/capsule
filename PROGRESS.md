@@ -1,7 +1,7 @@
 # Capsule — Progress
 
 ## Current Status
-Migrating to Next.js + FastAPI architecture. Frontend scaffolded, backend restructured, not yet running end-to-end.
+Both servers running. Next.js frontend + FastAPI backend wired end-to-end. Claude responding via Agent SDK.
 
 ---
 
@@ -10,8 +10,7 @@ Migrating to Next.js + FastAPI architecture. Frontend scaffolded, backend restru
 **Backend:**
 ```bash
 cd backend
-source .venv/bin/activate
-CLAUDE_PLUGIN_ROOT=~/.claude/plugins/cache/everything-claude-code/everything-claude-code/1.9.0 uvicorn app.main:app --reload
+CLAUDE_PLUGIN_ROOT=~/.claude/plugins/cache/everything-claude-code/everything-claude-code/1.9.0 .venv/bin/uvicorn app.main:app --reload
 # runs on http://localhost:8000
 ```
 
@@ -96,6 +95,23 @@ capsule/
 ### 2026-04-01 (Session 1)
 **Completed:** FastAPI server + SSE streaming, ChatGPT-style HTML/JS chat UI, IDEA.md, GitHub repo created and pushed, gh CLI set up, `.gitignore` added.
 **Gotchas:** `.venv/` and `__pycache__/` were being committed before `.gitignore` was added.
+
+### 2026-04-01 (Session 3)
+**Completed:**
+- Verified end-to-end: Next.js → FastAPI → Claude Agent SDK working
+- Recreated backend venv at `backend/.venv/` (broken after folder move)
+- Fixed `msg.message.content` → `msg.content` bug in `capsule.py`
+- Added inline comments to `capsule.py` explaining message type filtering and block structure
+- Created `CLAUDE.md` at project root via `/init`
+- Split `.claude/rules/` into `session.md`, `docs.md`, `refactor.md`
+- Restructured `PROGRESS.md` as single source of truth
+
+**Gotchas:**
+- Backend venv breaks if moved — always recreate with `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+- `CLAUDE_PLUGIN_ROOT` must be set when starting backend or ECC hooks error on every Claude session start
+- `claude-sonnet-4-6` model ID is invalid on Bedrock — use default (omit model) or `claude-sonnet-4-5`
+
+**Next:** Intent classifier — Claude classifies input into `todo`, `to_know`, `idea`, `calendar`, `briefing`
 
 ### 2026-04-01 (Session 2)
 **Completed:** Wired Claude Agent SDK into backend. Fixed `msg.message.content` → `msg.content` bug. Identified model mismatch (`claude-sonnet-4-6` invalid on Bedrock — uses default). Identified `CLAUDE_PLUGIN_ROOT` hook errors when SDK spawns Claude process. Migrated to Next.js + TypeScript + Tailwind frontend. Restructured backend into `backend/app/routes/` + `backend/app/agents/`. Removed `index.html` (replaced by Next.js). Split rules into `session.md`, `docs.md`, `refactor.md`. Restructured `PROGRESS.md` as single source of truth.
