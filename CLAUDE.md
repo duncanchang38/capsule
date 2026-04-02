@@ -120,9 +120,29 @@ CREATE TABLE captures (
 ## Backend Dev Notes
 
 - Backend venv: `backend/.venv/` — recreate with `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
-- Classifier uses `anthropic` SDK directly (not Agent SDK — wrong tool for structured JSON)
 - `AssistantMessage` has a `.content` list (not `.message.content`) — common gotcha
 - Session state is in-memory (`_sessions` dict) — lost on restart, acceptable for single-user local use
+
+### SDK Usage Split
+
+Two different Claude SDKs serve different layers of the app:
+
+**`anthropic` SDK (direct) → Capture layer**
+Use for deterministic, structured pipelines where you control every step.
+- `classifier.py` — structured JSON extraction (`CaptureType` + metadata)
+- Any per-type enrichment agents (extract topic, tags, deadline, etc.)
+- Rule: if the output is a JSON object with a known schema, use direct SDK
+
+**`claude-agent-sdk` → Mind Palace layer**
+Use for open-ended, tool-driven tasks where the agent decides what to look at next.
+- `search_agent.py` — "what do I know about X?" (queries SQLite, follows threads)
+- `briefing_agent.py` — daily synthesis across capture types + calendar
+- `evolution_agent.py` — how has my thinking on a topic changed over time
+- Rule: if the agent needs tools (SQLite queries, web search) and multiple reasoning steps, use Agent SDK
+
+**The dividing line:** Does the agent need to *decide what to look at*, or just *process what it's given?*
+- Given fixed input → process → structured output: direct SDK
+- Given a goal → explore → synthesize: Agent SDK
 
 ## Frontend Dev Notes
 

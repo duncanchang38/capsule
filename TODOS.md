@@ -1,3 +1,4 @@
+<!-- /autoplan restore point: /Users/duncan/.gstack/projects/duncanchang38-comp_claude/main-autoplan-restore-20260403-001054.md -->
 # Capsule — TODOs (v2)
 
 ## Implementation Order

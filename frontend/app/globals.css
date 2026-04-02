@@ -1,0 +1,203 @@
+@import "tailwindcss";
+
+/* ── FullCalendar — Notion Calendar style ─────────────────────────────── */
+
+:root {
+  --fc-border-color: #f0f0ef;
+  --fc-today-bg-color: rgba(59, 130, 246, 0.03);
+  --fc-page-bg-color: #ffffff;
+  --fc-neutral-bg-color: #ffffff;
+  --fc-small-font-size: 0.72rem;
+  --fc-event-border-color: transparent;
+}
+
+/* Header toolbar */
+.fc .fc-toolbar {
+  padding: 10px 16px 8px 16px;
+  gap: 6px;
+  border-bottom: 1px solid #f0f0ef;
+}
+.fc .fc-toolbar-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #1a1a1a;
+  letter-spacing: -0.01em;
+}
+.fc .fc-button {
+  background: transparent !important;
+  border: 1px solid #e8e8e7 !important;
+  color: #787774 !important;
+  font-size: 0.72rem !important;
+  padding: 3px 9px !important;
+  border-radius: 5px !important;
+  box-shadow: none !important;
+  font-weight: 500;
+  transition: all 0.1s;
+}
+.fc .fc-button:hover {
+  background: #f7f7f5 !important;
+  color: #1a1a1a !important;
+  border-color: #d5d4cf !important;
+}
+.fc .fc-button-active,
+.fc .fc-button-primary:not(:disabled).fc-button-active {
+  background: #1a1a1a !important;
+  border-color: #1a1a1a !important;
+  color: #ffffff !important;
+}
+.fc .fc-prev-button,
+.fc .fc-next-button {
+  padding: 3px 6px !important;
+}
+.fc .fc-today-button {
+  text-transform: none;
+  font-weight: 500;
+}
+
+/* Column headers */
+.fc .fc-col-header {
+  border-bottom: 1px solid #f0f0ef !important;
+}
+.fc .fc-col-header-cell {
+  padding: 6px 0 5px 0;
+  border-color: #f0f0ef !important;
+  background: #ffffff;
+}
+.fc .fc-col-header-cell-cushion {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: #b0aea9;
+  text-decoration: none !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+}
+/* Today column header — blue circle on day number */
+.fc .fc-day-today .fc-col-header-cell-cushion {
+  color: #3b82f6;
+  font-weight: 600;
+}
+.fc .fc-day-today {
+  background: rgba(59, 130, 246, 0.025) !important;
+}
+
+/* Time axis */
+.fc .fc-timegrid-axis {
+  width: 52px;
+}
+.fc .fc-timegrid-slot-label-cushion {
+  font-size: 0.62rem;
+  color: #c2c0bb;
+  font-weight: 400;
+  padding-right: 10px;
+  text-align: right;
+}
+.fc .fc-timegrid-slot {
+  height: 44px;
+  border-color: #f5f5f3 !important;
+}
+.fc .fc-timegrid-slot-minor {
+  border-color: transparent !important;
+}
+.fc .fc-timegrid-slot-lane {
+  border-color: #f5f5f3 !important;
+}
+
+/* Grid borders — very light */
+.fc .fc-timegrid-col {
+  border-color: #f0f0ef !important;
+}
+.fc .fc-scrollgrid {
+  border: none !important;
+}
+.fc .fc-scrollgrid td,
+.fc .fc-scrollgrid th {
+  border-color: #f0f0ef !important;
+}
+.fc .fc-scrollgrid-section > td {
+  border: none !important;
+}
+.fc .fc-scrollgrid-section-header > th {
+  border-bottom: 1px solid #f0f0ef !important;
+}
+
+/* Events */
+.fc .fc-event {
+  border-radius: 4px;
+  border: none !important;
+  padding: 2px 5px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: none !important;
+}
+.fc .fc-event:hover {
+  filter: brightness(0.95);
+}
+.fc .fc-event-title {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fc .fc-event-time {
+  font-weight: 400;
+  opacity: 0.8;
+  font-size: 0.65rem;
+}
+
+/* Day grid events (month view) */
+.fc .fc-daygrid-event {
+  border-radius: 3px;
+  font-size: 0.7rem;
+  padding: 1px 4px;
+}
+.fc .fc-daygrid-day-number {
+  font-size: 0.72rem;
+  color: #787774;
+  text-decoration: none !important;
+}
+.fc .fc-day-today .fc-daygrid-day-number {
+  background: #3b82f6;
+  color: #ffffff;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  margin: 4px;
+}
+
+/* Current time indicator — red, Notion-style */
+.fc .fc-timegrid-now-indicator-line {
+  border-color: #ef4444 !important;
+  border-width: 1.5px !important;
+}
+.fc .fc-timegrid-now-indicator-arrow {
+  border-color: #ef4444 !important;
+  border-top-color: transparent !important;
+  border-bottom-color: transparent !important;
+}
+
+/* All-day row */
+.fc .fc-timegrid-all-day {
+  border-color: #f0f0ef !important;
+}
+
+/* Scrollbar — minimal */
+.fc .fc-scroller::-webkit-scrollbar {
+  width: 4px;
+}
+.fc .fc-scroller::-webkit-scrollbar-track {
+  background: transparent;
+}
+.fc .fc-scroller::-webkit-scrollbar-thumb {
+  background: #e8e8e7;
+  border-radius: 2px;
+}

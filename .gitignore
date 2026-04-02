@@ -9,3 +9,4 @@ __pycache__/
 .claude/skills/gstack/bin/gstack-global-discover
 settings.local.json
 backend/data/
+.gstack/

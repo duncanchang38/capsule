@@ -5,3 +5,5 @@ anthropic
 pytest
 pytest-asyncio
 httpx
+botocore
+boto3

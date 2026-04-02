@@ -106,10 +106,26 @@ capsule/
 | 2026-04-02 | Output views | Calendar + To-Dos as filtered renders | Views are projections of rich typed store, not separate buckets |
 | 2026-04-02 | Completion | `CompletionType` enum drives behavior | State machine/views are type-agnostic — extensible without rewrites |
 | 2026-04-02 | v1 code | Archived to `archive/v1` branch | Fresh start on v2 design |
+| 2026-04-02 | SDK split | `anthropic` SDK for capture layer, `claude-agent-sdk` for mind palace | Capture = deterministic pipeline (structured JSON out); Mind palace = open-ended agent with SQLite tools. Rule: if the agent decides what to look at next → Agent SDK. If it processes fixed input → direct SDK. |
 
 ---
 
 ## Session Log
+
+### 2026-04-03 (Session 8)
+**Completed:**
+- Redesigned Calendar page to match actual Notion Calendar app aesthetic
+  - Three-column layout: 220px left sidebar + full-width week grid (was narrow centered box)
+  - Left sidebar: interactive mini month calendar (prev/next nav, today highlighted in blue) + color-dot capture type toggles (click to show/hide each type's events)
+  - Week grid: near-invisible borders (`#f0f0ef`), today column subtle blue tint, now-indicator switched to red (`#ef4444`) matching Notion
+  - Day headers: smaller, uppercase, gray — today in blue
+  - Removed `max-w-2xl` from global layout so calendar gets full viewport width; added it back inline to chat and todos pages
+- Installed `emilkowalski/skill` (emil-design-eng) via `npx skills add` — installed to `.agents/skills/`, symlinked to `.claude/skills/`
+
+**Gotchas:**
+- `max-w-2xl` was on the layout wrapper — removing it for full-bleed calendar required adding it back directly to the chat (`page.tsx`) and todos wrappers
+
+**Next:** Google Calendar sync, event click detail panel, drag-to-create events
 
 ### 2026-04-02 (Session 5)
 **Completed:**
