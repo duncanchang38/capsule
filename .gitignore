@@ -4,6 +4,8 @@ __pycache__/
 *.pyo
 .env
 .DS_Store
-.claude/skills/
+.claude/skills/gstack/browse/dist/
+.claude/skills/gstack/design/dist/
+.claude/skills/gstack/bin/gstack-global-discover
 settings.local.json
 backend/data/
