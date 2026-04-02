@@ -1,45 +1,72 @@
-# Capsule — TODOs
+# Capsule — TODOs (v2)
 
-## Pending
+## Implementation Order
 
-### Bucket Query (query mode vs. capture mode)
-**What:** Detect when a message is a query ("show me my todos", "what ideas do I have?") and return a formatted list from SQLite instead of running the classifier and storing it as a new capture.
+### 1. Classifier (backend/app/agents/classifier.py)
+`classify_intent(text, correction_hint?) → ClassificationResult`
 
-**Why:** Without this, "what's in my todo list?" gets classified as a `to_know` item and stored. The app needs to distinguish capture intent from query intent.
+Returns `CaptureType` + `CompletionType` + `summary` + `metadata`. Uses Anthropic SDK directly (not Agent SDK). Types: `to_hit`, `to_learn`, `to_cook`, `to_know`, `calendar`, `inbox`.
 
-**Context:** This is a new intent type — query mode sits alongside capture mode in the state machine. The classifier prompt will need a fifth intent class (`query`) with examples. `chat.py` routes `query` results to a DB lookup + formatted response instead of the confirmation flow. No storage write on a query.
-
-**Depends on:** classifier + SQLite storage from the intent classifier PR.
-
----
-
-### Tabs UI (visual bucket browser)
-**What:** To Do / To Know / To Learn / Ideas / Calendar tabs in the Next.js frontend. Each tab shows items from that bucket. New `GET /items?bucket=todo` endpoint. Items can be marked done/dismissed.
-
-**Why:** Right now the only way to see stored items is to open the SQLite DB file directly. After 2 weeks of capturing, you need a UI.
-
-**Context:** Build this after 2 weeks of real self-use. Look at the SQLite data — which bucket has the highest `status='done'` rate? Build that tab first. The data tells you where the product actually works. Start with a read-only list. Add mark-as-done second.
-
-**Depends on:** intent classifier PR + 2 weeks of captured data.
+Metadata per type:
+- `to_hit`: `{ deadline: str | None, priority: "high"|"normal"|None }`
+- `to_learn`: `{ resource_type: "article"|"video"|"book"|"course"|"other"|None, url: str | None, topic: str | None }`
+- `to_cook`: `{ domain: str | None }` — e.g. "business", "product", "creative"
+- `to_know`: `{ question: str, topic: str | None }`
+- `calendar`: `{ event_name: str, date: str | None, time: str | None, location: str | None }`
+- `inbox`: `{ raw: str }`
 
 ---
 
-### to_learn → idea knowledge graph wiring (v2)
-**What:** When a `to_learn` item is marked `status: learned`, it should feed into the `idea` bucket session context. Future query: "what have I learned about X?" or "compile what I've read about LLMs."
+### 2. Storage (backend/app/storage/db.py)
+`init()`, `save_capture()`, `get_recent(capture_type, limit=20)`
 
-**Why:** The `to_learn` bucket generates knowledge outputs — not just "done" checkmarks. Without this wiring, learned items die in the archive. With it, Capsule builds a personal knowledge graph over time.
-
-**Context:** The `status: learned` field is already in the schema. The wiring is a v2 feature that requires: (1) a query mode in the state machine, (2) the idea bucket session to load recent `to_learn` items as context on init. The `to_learn` session should store the topic and resource_type to enable topical grouping.
-
-**Depends on:** classifier + storage + 2 weeks of to_learn data to validate the use case.
+Schema: see CLAUDE.md. `completion_type` stored alongside `capture_type`. `deadline` as its own column (not buried in metadata JSON) so the Calendar view can query it directly.
 
 ---
 
-### Inbox review flow
-**What:** When a capture lands in `inbox` (classifier confidence < 0.4), present a disambiguation response: "I couldn't figure out where this belongs — is it a task, a question, or an idea?" User picks bucket, item gets classified and stored normally.
+### 3. State machine (backend/app/routes/chat.py)
+States: `AWAITING_CAPTURE` → `AWAITING_CONFIRMATION` → store → reset.
+Inbox path: `AWAITING_CAPTURE` → `INBOX_CLARIFICATION` → re-classify → `AWAITING_CONFIRMATION`.
 
-**Why:** Without this, low-confidence items either get mis-filed silently or rejected with an error. Both break the capture experience.
+Key change from v1: confirmation message is summary-only — type name never shown.
+- v1: "Got it — adding to **To Do**. Call dentist before Friday. Sound right?"
+- v2: "Got it: Call dentist before Friday. Sound right?"
 
-**Context:** The `inbox` bucket is a holding state, not a permanent bucket. No SQLite write until the user resolves it. State machine: `AWAITING_CAPTURE` → `inbox` result → send disambiguation → `AWAITING_CLASSIFICATION` (new state) → user picks → `AWAITING_CONFIRMATION` (normal flow resumes). The disambiguation message should show the classifier's top 2 guesses as hints.
+Inbox clarification asks context questions, not bucket names:
+- "Is this something you need to do, or something you want to sit with?"
+- Presents numbered options, user picks 1/2/3.
 
-**Depends on:** classifier + state machine from the intent classifier PR.
+---
+
+### 4. Frontend: Calendar + To-Dos views (frontend/)
+Two tabs. Both are filtered renders of the `captures` table:
+- **Calendar** — `capture_type = 'calendar'`, ordered by `deadline ASC`
+- **To-Dos** — all other active types, grouped or sorted within the view
+
+Type-differentiated affordances:
+- `to_hit`: checkbox (→ archived), deadline badge
+- `to_learn`: "mark absorbed" button
+- `to_cook`: no completion control — persistent card, subtle visual distinction
+- `to_know`: "mark answered" button
+
+New endpoint: `GET /items?view=todos` and `GET /items?view=calendar`
+
+---
+
+### 5. Query mode (v2)
+Detect "show me my to_learn items" / "what ideas do I have?" as a query, not a capture. Route to DB lookup + formatted response. No storage write. Requires a `query` intent class in the classifier.
+
+---
+
+### 6. to_learn → to_cook knowledge wiring (v2)
+When a `to_learn` item is marked absorbed, feed its topic/content into `to_cook` session context. Enables: "compile what I've learned about X." Depends on query mode + 2 weeks of real data.
+
+---
+
+## Deferred
+
+- Tabs UI for individual type filtering (build after 2 weeks of self-use data)
+- Calendar external API actions (Google Calendar — post-validation)
+- Multimodal input (audio/image)
+- Auth
+- Docker

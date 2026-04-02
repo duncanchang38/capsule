@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Capsule is a personal AI-powered intake layer. Users type anything — ideas, questions, events, tasks — and Claude classifies, routes, and acts on it. See `IDEA.md` for the full concept and `PROGRESS.md` for current status and what's next.
+Capsule is a personal AI-powered intake layer. Users type anything — ideas, questions, events, tasks — and Claude classifies and routes it silently. The user never selects a category. See `IDEA.md` for the full concept and `PROGRESS.md` for current status.
+
+v1 code is preserved on the `archive/v1` branch.
 
 ## Running Locally
 
@@ -20,37 +22,113 @@ npm run dev
 
 Frontend runs on `http://localhost:3000`, backend on `http://localhost:8000`. The Next.js dev server proxies `/api/*` → `localhost:8000` via `next.config.ts`.
 
-## Architecture
+## Architecture (v2)
 
 **Request flow:**
 ```
-Browser → Next.js (3000) → /api/chat proxied → FastAPI (8000) → Claude Agent SDK → Claude
+Browser → Next.js (3000) → /api/chat proxied → FastAPI (8000) → Anthropic SDK → Claude
 ```
 
+**Core model — two surfaces, five internal types:**
+
+```
+[ Calendar ]   [ To-Dos ]
+                 ├── to_hit    (task with deadline)
+                 ├── to_learn  (content/skill to consume)
+                 ├── to_cook   (idea to incubate — persistent, no checkbox)
+                 └── to_know   (question seeking an answer)
+```
+
+Calendar and To-Dos are **filtered renders** of the typed store, not separate buckets. The user never sees or selects a type — AI assigns it silently.
+
+**Capture flow:**
+1. User types anything in a single input box
+2. Backend classifies silently → `CaptureType` + `CompletionType`
+3. Summary-only confirmation: "Got it: [summary]. Sound right?" — type name never shown
+4. On confirm → stored to SQLite, appears in Calendar or To-Dos view
+5. Inbox fallback for low-confidence: asks a context question, not "which bucket?"
+
+**`CompletionType` drives behavior (not `CaptureType`):**
+
+| CaptureType | CompletionType | Affordance |
+|-------------|---------------|------------|
+| `to_hit`    | `archive`     | checkbox → archived |
+| `calendar`  | `archive`     | auto-archives after event date |
+| `to_learn`  | `absorb`      | "mark absorbed" |
+| `to_cook`   | `persist`     | no completion — persistent card |
+| `to_know`   | `answer`      | "mark answered" |
+| `inbox`     | —             | disambiguation flow, no storage write |
+
+State machine and views branch on `CompletionType`, never on `CaptureType` directly. New types can be added by extending the enums + classifier prompt without touching the state machine.
+
 **Backend** (`backend/app/`):
-- `main.py` — FastAPI app, CORS restricted to `localhost:3000`, mounts routers
-- `routes/chat.py` — `POST /chat` accepts `{content: string}`, returns SSE stream
-- `agents/capsule.py` — `stream_response()` async generator; wraps `ClaudeSDKClient`, yields words from `AssistantMessage.content` blocks
+- `main.py` — FastAPI app, CORS, lifespan, db.init()
+- `routes/chat.py` — `POST /chat` SSE stream + state machine
+- `agents/classifier.py` — `classify_intent(text, correction_hint?)` → `ClassificationResult`
+- `agents/bucket_session.py` — `BucketSession.store()` → SQLite + ack string
+- `storage/db.py` — `init()`, `save_capture()`, `get_recent()`
 
 **Frontend** (`frontend/`):
-- `lib/api.ts` — `streamChat()` async generator; handles SSE parsing, yields text chunks
-- `hooks/useChat.ts` — manages `messages[]` state, calls `streamChat()`, streams assistant reply into the last message
-- `components/chat/` — `InputBar`, `MessageList`, `MessageBubble` are pure presentational components
-- `app/page.tsx` — composes the three components with `useChat`
+- `lib/api.ts` — `streamChat()` SSE async generator
+- `hooks/useChat.ts` — message state + streaming
+- `components/chat/` — `InputBar`, `MessageList`, `MessageBubble`
+- `app/page.tsx` — composes views (Calendar + To-Dos tabs)
 
-**Key constraint:** Agent SDK spawns a Claude subprocess. The `CLAUDE_PLUGIN_ROOT` env var must be set when starting the backend or ECC hooks will error on every session start.
+**Key constraint:** `CLAUDE_PLUGIN_ROOT` env var must be set when starting the backend.
+
+## Data Model
+
+```python
+class CaptureType(str, Enum):
+    to_hit   = "to_hit"
+    to_learn = "to_learn"
+    to_cook  = "to_cook"
+    to_know  = "to_know"
+    calendar = "calendar"
+    inbox    = "inbox"
+
+class CompletionType(str, Enum):
+    archive = "archive"   # to_hit, calendar
+    absorb  = "absorb"    # to_learn
+    persist = "persist"   # to_cook
+    answer  = "answer"    # to_know
+
+COMPLETION_MAP = {
+    "to_hit":   "archive",
+    "calendar": "archive",
+    "to_learn": "absorb",
+    "to_cook":  "persist",
+    "to_know":  "answer",
+}
+```
+
+```sql
+CREATE TABLE captures (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    capture_type    TEXT NOT NULL,
+    completion_type TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    summary         TEXT NOT NULL,
+    metadata        TEXT NOT NULL,  -- JSON, type-specific
+    status          TEXT DEFAULT 'active',
+    deadline        TEXT,           -- ISO date string, nullable
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
 
 ## Backend Dev Notes
 
-- Backend venv is at `backend/.venv/` — recreate with `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` if paths break
-- `ClaudeAgentOptions(allowed_tools=[])` — no tools given to Claude yet; intent classification and bucket routing are the next additions
+- Backend venv: `backend/.venv/` — recreate with `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+- Classifier uses `anthropic` SDK directly (not Agent SDK — wrong tool for structured JSON)
 - `AssistantMessage` has a `.content` list (not `.message.content`) — common gotcha
+- Session state is in-memory (`_sessions` dict) — lost on restart, acceptable for single-user local use
 
 ## Frontend Dev Notes
 
-- Tailwind v4 is used — config is in `postcss.config.mjs`, not `tailwind.config.js`
+- Tailwind v4 — config in `postcss.config.mjs`, not `tailwind.config.js`
 - All chat state lives in `useChat.ts`; components are stateless
-- `next.config.ts` rewrites handle the backend proxy — don't hardcode `localhost:8000` in frontend code
+- `next.config.ts` rewrites handle backend proxy — don't hardcode `localhost:8000`
 
 ## gstack
 Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.

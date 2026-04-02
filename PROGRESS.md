@@ -1,7 +1,7 @@
 # Capsule — Progress
 
 ## Current Status
-Intent classifier built and tested. 5-bucket taxonomy (todo/calendar/to_know/to_learn/idea) + inbox fallback. State machine live. 29 tests passing.
+v2 redesign. Implementation code reset (v1 archived on `archive/v1` branch). New `to_X` type system designed. Ready to build.
 
 ---
 
@@ -101,6 +101,11 @@ capsule/
 | 2026-04-01 | Frontend (revised) | Next.js + TypeScript + Tailwind | Scales better for tabs, auth, state |
 | 2026-04-01 | Architecture | Next.js proxies to FastAPI | No CORS, clean separation, backend stays Python |
 | 2026-04-01 | Agent location | Backend only | Agents need file/shell/API access — not browser |
+| 2026-04-02 | Taxonomy | `to_X` type system | Action-oriented (what to DO) beats content-oriented (what IS this) |
+| 2026-04-02 | Classification UX | Silent + summary-only confirmation | User never sees internal type — AI decides, user confirms summary |
+| 2026-04-02 | Output views | Calendar + To-Dos as filtered renders | Views are projections of rich typed store, not separate buckets |
+| 2026-04-02 | Completion | `CompletionType` enum drives behavior | State machine/views are type-agnostic — extensible without rewrites |
+| 2026-04-02 | v1 code | Archived to `archive/v1` branch | Fresh start on v2 design |
 
 ---
 
@@ -140,6 +145,18 @@ User experienced the core product pain live — captured 4 items (YC app + 3 res
 - Design doc updated at `~/.gstack/projects/duncanchang38-capsule/duncan-main-design-20260402-000331.md`
 
 **Next:** Build the classifier. Implementation order: Storage → Classifier (parallel) → Bucket session → State machine → Tests
+
+### 2026-04-02 (Session 7)
+**Completed:**
+- v2 redesign via `/office-hours` — rethought taxonomy and UX from scratch
+- New `to_X` type system: `to_hit`, `to_learn`, `to_cook`, `to_know`, `calendar`, `inbox`
+- Key insight: separate input model (one text box, no classification) from storage model (rich typed store)
+- `CompletionType` enum decouples behavior from type — extensible by design
+- v1 implementation archived to `archive/v1` branch on GitHub
+- CLAUDE.md, TODOS.md, PROGRESS.md updated with v2 architecture
+- Design doc: `~/.gstack/projects/duncanchang38-capsule/duncan-main-design-20260402-114916.md`
+
+**Next:** Build v2 — start with classifier (`capture_type` + `completion_type`), then storage schema, then state machine, then frontend views
 
 ### 2026-04-01 (Session 4)
 **Completed:**
