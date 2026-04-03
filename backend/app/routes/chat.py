@@ -3,30 +3,21 @@ import time
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from app.agents.classifier import classify_intent, ClassificationResult
+from app.session.state_machine import SessionState, advance
 from app.agents.bucket_session import BucketSession
+from app.agents.classifier import BulkClassificationResult
+from app.agents import query_agent
+from app.storage import db
 
 router = APIRouter()
 
-# In-memory session store: session_id → state dict
-_sessions: dict[str, dict] = {}
+_sessions: dict[str, SessionState] = {}
 SESSION_TTL = 3600  # 1 hour
-
-AFFIRM_WORDS = {"yes", "yeah", "yep", "yup", "correct", "right", "ok", "okay", "sure", "sounds good", "confirm", "go", "do it", "save it", "saved"}
-CANCEL_WORDS = {"no", "nope", "cancel", "discard", "nevermind", "never mind", "stop", "abort", "delete"}
 
 
 class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"
-
-
-def _is_affirm(text: str) -> bool:
-    return text.strip().lower() in AFFIRM_WORDS
-
-
-def _is_cancel(text: str) -> bool:
-    return text.strip().lower() in CANCEL_WORDS
 
 
 def _sse(event: str, data: dict) -> str:
@@ -35,30 +26,32 @@ def _sse(event: str, data: dict) -> str:
 
 def _prune_sessions():
     now = time.time()
-    stale = [sid for sid, s in _sessions.items() if now - s.get("last_active", 0) > SESSION_TTL]
+    stale = [sid for sid, s in _sessions.items() if now - s.last_active > SESSION_TTL]
     for sid in stale:
         del _sessions[sid]
 
 
-def _get_session(session_id: str) -> dict:
+def _get_session(session_id: str) -> SessionState:
     _prune_sessions()
     if session_id not in _sessions:
-        _sessions[session_id] = {
-            "state": "AWAITING_CAPTURE",
-            "pending": None,   # ClassificationResult
-            "original_text": None,
-            "retries": 0,
-            "last_active": time.time(),
-        }
-    _sessions[session_id]["last_active"] = time.time()
+        _sessions[session_id] = SessionState()
     return _sessions[session_id]
+
+
+def _conflict_note(deadline: str) -> str:
+    """Return a conflict warning string if other items exist on the same date."""
+    conflicts = [c for c in db.get_by_view("calendar") if c["deadline"] == deadline]
+    if not conflicts:
+        return ""
+    names = ", ".join(c["summary"] for c in conflicts[:3])
+    return f" Heads up: you already have {names} that day."
 
 
 @router.post("/chat")
 async def chat(req: ChatRequest):
-    if len(req.message) > 2000:
+    if len(req.message) > 10000:
         async def too_long():
-            yield _sse("message", {"text": "That's a bit long — keep it under 2000 characters."})
+            yield _sse("message", {"text": "That's too long — keep it under 10,000 characters."})
             yield _sse("done", {})
         return StreamingResponse(too_long(), media_type="text/event-stream")
 
@@ -66,92 +59,45 @@ async def chat(req: ChatRequest):
     bucket = BucketSession()
 
     async def stream():
-        state = session["state"]
-
-        # ── AWAITING_CAPTURE ──────────────────────────────────────────────────
-        if state == "AWAITING_CAPTURE":
-            try:
-                result: ClassificationResult = classify_intent(req.message)
-            except Exception as e:
-                yield _sse("message", {"text": f"Couldn't classify that — try again. ({e})"})
-                yield _sse("done", {})
-                return
-
-            if result.capture_type == "inbox" or result.confidence < 0.4:
-                session["state"] = "INBOX_CLARIFICATION"
-                session["original_text"] = req.message
-                yield _sse("message", {"text": "Is this something you need to do, something to explore, or a question you want answered?"})
-                yield _sse("done", {})
-                return
-
-            session["state"] = "AWAITING_CONFIRMATION"
-            session["pending"] = result
-            session["original_text"] = req.message
-            session["retries"] = 0
-
-            yield _sse("message", {"text": f"Got it: {result.summary}. Sound right?"})
+        try:
+            new_state, reply, capture_to_store = await advance(session, req.message)
+        except Exception as e:
+            yield _sse("message", {"text": f"Something went wrong — try again. ({e})"})
             yield _sse("done", {})
+            return
 
-        # ── AWAITING_CONFIRMATION ─────────────────────────────────────────────
-        elif state == "AWAITING_CONFIRMATION":
-            pending: ClassificationResult = session["pending"]
+        _sessions[req.session_id] = new_state
 
-            if _is_affirm(req.message):
-                ack = bucket.store(session["original_text"], pending)
-                session["state"] = "AWAITING_CAPTURE"
-                session["pending"] = None
-                session["original_text"] = None
-                yield _sse("message", {"text": ack})
-                yield _sse("done", {})
-
-            elif _is_cancel(req.message):
-                session["state"] = "AWAITING_CAPTURE"
-                session["pending"] = None
-                session["original_text"] = None
-                yield _sse("message", {"text": "Discarded."})
-                yield _sse("done", {})
-
+        if capture_to_store is not None:
+            if isinstance(capture_to_store, BulkClassificationResult):
+                # Bulk save — store each item separately, fire enrichment per item
+                count = 0
+                for item in capture_to_store.items:
+                    await bucket.store(item.summary, item)
+                    count += 1
+                yield _sse("message", {"text": f"Saved {count} items."})
+            elif capture_to_store.capture_type == "query":
+                # Queries bypass storage — answer immediately from captures context
+                answer = await query_agent.answer(req.message)
+                yield _sse("message", {"text": answer})
             else:
-                # Treat as a correction
-                retries = session["retries"] + 1
-                session["retries"] = retries
+                content = session.original_text if session.original_text else req.message
+                ack = await bucket.store(content, capture_to_store)
+                yield _sse("message", {"text": ack})
 
-                if retries >= 3:
-                    session["state"] = "AWAITING_CAPTURE"
-                    session["pending"] = None
-                    session["original_text"] = None
-                    yield _sse("message", {"text": "Let me start over — just re-type what you want to capture."})
-                    yield _sse("done", {})
-                    return
+        elif reply:
+            # Entering AWAITING_CONFIRMATION — check for calendar conflicts
+            if (
+                new_state.state == "AWAITING_CONFIRMATION"
+                and new_state.pending is not None
+                and new_state.pending.capture_type == "calendar"
+                and new_state.pending.deadline
+            ):
+                note = _conflict_note(new_state.pending.deadline)
+                yield _sse("message", {"text": reply + note})
+            else:
+                yield _sse("message", {"text": reply})
 
-                try:
-                    result = classify_intent(session["original_text"], correction_hint=req.message)
-                except Exception as e:
-                    yield _sse("message", {"text": f"Couldn't re-classify — try again. ({e})"})
-                    yield _sse("done", {})
-                    return
-
-                session["pending"] = result
-                yield _sse("message", {"text": f"Got it: {result.summary}. Sound right?"})
-                yield _sse("done", {})
-
-        # ── INBOX_CLARIFICATION ───────────────────────────────────────────────
-        elif state == "INBOX_CLARIFICATION":
-            try:
-                result = classify_intent(
-                    session["original_text"],
-                    correction_hint=req.message,
-                )
-            except Exception as e:
-                yield _sse("message", {"text": f"Couldn't classify — try again. ({e})"})
-                yield _sse("done", {})
-                return
-
-            session["state"] = "AWAITING_CONFIRMATION"
-            session["pending"] = result
-            session["retries"] = 0
-
-            yield _sse("message", {"text": f"Got it: {result.summary}. Sound right?"})
-            yield _sse("done", {})
+        yield _sse("done", {})
 
     return StreamingResponse(stream(), media_type="text/event-stream")

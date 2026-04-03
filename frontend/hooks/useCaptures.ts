@@ -6,12 +6,16 @@ import { getCaptures, updateCaptureStatus, type Capture } from "@/lib/api";
 export function useCaptures() {
   const [captures, setCaptures] = useState<Capture[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await getCaptures();
       setCaptures(data);
+    } catch {
+      setError("Couldn't load captures.");
     } finally {
       setLoading(false);
     }
@@ -26,5 +30,5 @@ export function useCaptures() {
     );
   }, []);
 
-  return { captures, loading, refresh, markDone };
+  return { captures, loading, error, refresh, markDone };
 }

@@ -1,7 +1,7 @@
 # Capsule — Progress
 
 ## Current Status
-v2 redesign. Implementation code reset (v1 archived on `archive/v1` branch). New `to_X` type system designed. Ready to build.
+v2 fully functional. All 6 build plan steps complete + bulk intake + to_cook extensibility. 85 backend tests passing. 7 frontend pages live.
 
 ---
 
@@ -111,6 +111,50 @@ capsule/
 ---
 
 ## Session Log
+
+### 2026-04-03 (Session 10)
+**Completed:**
+- **Calendar/todos coherence model** — calendar now shows ALL capture types with deadlines (not just calendar+to_hit); todos sorted by urgency (overdue → due soon → no date); "Overdue" section at top of todos page; done button in EventPopover
+- **Bulk intake** — pasting a list (3+ items with markdown checklist, numbered, or bullet syntax) routes to `bulk_classify()` via single Haiku call (8192 tokens), enters `AWAITING_BULK_CONFIRMATION` state, saves all items on affirm with per-item enrichment tasks. Input limit raised 2K → 10K chars
+- **Bedrock model ID bug** — fixed `claude-haiku-4-5-20251001` → `anthropic.claude-3-haiku-20240307-v1:0` in all 5 agents (organize, to_learn, to_know, query, book_action). Was causing 400 errors on every enrichment call
+- **to_cook extensibility** — full idea lifecycle system:
+  - `cook_agent.py`: fires on save, generates 3-5 development threads + refined domain, sets `stage: "seed"` in metadata
+  - `idea_tasks_agent.py`: on-demand, generates 3-5 concrete to_hit tasks from idea, advances stage to "developing"
+  - `PATCH /captures/{id}/stage` — validates and updates idea stage (seed/brewing/developing/ready/parked)
+  - `POST /captures/{id}/tasks` — triggers idea_tasks_agent synchronously, returns count
+  - `/ideas` page — dedicated ideas home, organized by stage with stage pills, thread expansion, tasks button, park action
+  - todos page to_cook cards enhanced with inline threads, stage badge, "→ Tasks" button
+  - Nav: Ideas link added between To-Dos and Reading
+
+**Test count:** 71 → 85 passing (added test_cook_agent.py ×5, test_idea_tasks_agent.py ×4, test_captures.py +6, test_db.py +1 urgency sort, test_state_machine.py +12 bulk tests)
+
+**Gotchas:**
+- `AsyncAnthropicBedrock` requires Bedrock model IDs (`anthropic.claude-3-haiku-20240307-v1:0`), not Anthropic API IDs (`claude-haiku-4-5-20251001`) — easy to introduce when copying from API docs
+- Bulk confirmation has no correction path by design — all-or-nothing; partial save deferred
+- `merge_metadata()` needed for cook/stage updates because `update_metadata()` replaces entire JSON
+
+**Next:** Revisit scheduling (weekly "what's simmering?" digest), related captures surfacing, ideas page search/filter
+
+### 2026-04-03 (Session 9)
+**Completed:**
+- Ran `/autoplan` on `TODOS.md` — full CEO + Design + Eng review pipeline
+- Phase 1 CEO: 9 issues. Premise gate passed: revise-in-place (items 1-3 already exist as v1). Key changes: state machine extraction, user_id in schema, inbox = session state only (no DB write), query type as classifier placeholder, minimum Layer 2 agent added
+- Phase 2 Design: 6 issues. Decided: refined text empty state, skeleton loading, error state spec, 44px touch target wrapper, aria roles on checkbox, shared lib/typeConfig.ts
+- Phase 3 Eng: 7 issues. Decided: AsyncAnthropicBedrock (fixes event loop blocking, keeps Bedrock auth), json.loads guarded with try/except, full test suite (0% → 80%+ target)
+
+**TODOS.md v2 fully reviewed. Implementation order locked:**
+1. Revise classifier (AsyncAnthropicBedrock + async + metadata extraction + query noop + json guard)
+2. Revise storage (user_id column)
+3. Extract state machine → app/session/state_machine.py
+4. Add /items API endpoints (GET todos/calendar + PATCH status)
+5. Wire frontend (empty states, loading, error, touch targets, shared typeConfig.ts)
+6. to_learn enrichment agent (asyncio.create_task fire-and-forget)
+
+**Next:** Step 1 — revise classifier.py
+
+**Gotchas:**
+- Use `AsyncAnthropicBedrock` not `AnthropicBedrock` — async version, same Bedrock auth
+- COMPLETION_MAP must handle `query` type with None → skip store()
 
 ### 2026-04-03 (Session 8)
 **Completed:**

@@ -69,3 +69,18 @@ export async function updateCaptureStatus(id: number, status: string): Promise<v
     body: JSON.stringify({ status }),
   });
 }
+
+export async function updateCaptureStage(id: number, stage: string): Promise<void> {
+  await fetch(`/api/captures/${id}/stage`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stage }),
+  });
+}
+
+export async function generateIdeaTasks(id: number): Promise<number> {
+  const res = await fetch(`/api/captures/${id}/tasks`, { method: "POST" });
+  if (!res.ok) return 0;
+  const data = await res.json();
+  return data.count ?? 0;
+}

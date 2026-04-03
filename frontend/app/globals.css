@@ -1,8 +1,13 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
-/* ── FullCalendar — Notion Calendar style ─────────────────────────────── */
-
+/* ── Custom easing curves ──────────────────────────────────────────────── */
 :root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* FullCalendar tokens */
   --fc-border-color: #f0f0ef;
   --fc-today-bg-color: rgba(59, 130, 246, 0.03);
   --fc-page-bg-color: #ffffff;
@@ -11,7 +16,7 @@
   --fc-event-border-color: transparent;
 }
 
-/* Header toolbar */
+/* ── Header toolbar ────────────────────────────────────────────────────── */
 .fc .fc-toolbar {
   padding: 10px 16px 8px 16px;
   gap: 6px;
@@ -32,12 +37,17 @@
   border-radius: 5px !important;
   box-shadow: none !important;
   font-weight: 500;
-  transition: all 0.1s;
+  transition: background-color 100ms var(--ease-out), color 100ms var(--ease-out), border-color 100ms var(--ease-out), transform 80ms var(--ease-out) !important;
 }
-.fc .fc-button:hover {
-  background: #f7f7f5 !important;
-  color: #1a1a1a !important;
-  border-color: #d5d4cf !important;
+@media (hover: hover) and (pointer: fine) {
+  .fc .fc-button:hover {
+    background: #f7f7f5 !important;
+    color: #1a1a1a !important;
+    border-color: #d5d4cf !important;
+  }
+}
+.fc .fc-button:active {
+  transform: scale(0.96) !important;
 }
 .fc .fc-button-active,
 .fc .fc-button-primary:not(:disabled).fc-button-active {
@@ -54,7 +64,7 @@
   font-weight: 500;
 }
 
-/* Column headers */
+/* ── Column headers ────────────────────────────────────────────────────── */
 .fc .fc-col-header {
   border-bottom: 1px solid #f0f0ef !important;
 }
@@ -76,7 +86,6 @@
   gap: 2px;
   padding: 0 4px;
 }
-/* Today column header — blue circle on day number */
 .fc .fc-day-today .fc-col-header-cell-cushion {
   color: #3b82f6;
   font-weight: 600;
@@ -85,7 +94,7 @@
   background: rgba(59, 130, 246, 0.025) !important;
 }
 
-/* Time axis */
+/* ── Time axis ─────────────────────────────────────────────────────────── */
 .fc .fc-timegrid-axis {
   width: 52px;
 }
@@ -107,7 +116,7 @@
   border-color: #f5f5f3 !important;
 }
 
-/* Grid borders — very light */
+/* ── Grid borders ──────────────────────────────────────────────────────── */
 .fc .fc-timegrid-col {
   border-color: #f0f0ef !important;
 }
@@ -125,7 +134,7 @@
   border-bottom: 1px solid #f0f0ef !important;
 }
 
-/* Events */
+/* ── Events ────────────────────────────────────────────────────────────── */
 .fc .fc-event {
   border-radius: 4px;
   border: none !important;
@@ -134,9 +143,16 @@
   font-weight: 500;
   cursor: pointer;
   box-shadow: none !important;
+  transition: filter 120ms var(--ease-out), transform 80ms var(--ease-out) !important;
 }
-.fc .fc-event:hover {
-  filter: brightness(0.95);
+@media (hover: hover) and (pointer: fine) {
+  .fc .fc-event:hover {
+    filter: brightness(0.9);
+  }
+}
+.fc .fc-event:active {
+  filter: brightness(0.85) !important;
+  transform: scale(0.97) !important;
 }
 .fc .fc-event-title {
   font-weight: 500;
@@ -150,7 +166,7 @@
   font-size: 0.65rem;
 }
 
-/* Day grid events (month view) */
+/* ── Day grid (month view) ─────────────────────────────────────────────── */
 .fc .fc-daygrid-event {
   border-radius: 3px;
   font-size: 0.7rem;
@@ -174,7 +190,7 @@
   margin: 4px;
 }
 
-/* Current time indicator — red, Notion-style */
+/* ── Now indicator ─────────────────────────────────────────────────────── */
 .fc .fc-timegrid-now-indicator-line {
   border-color: #ef4444 !important;
   border-width: 1.5px !important;
@@ -185,12 +201,12 @@
   border-bottom-color: transparent !important;
 }
 
-/* All-day row */
+/* ── All-day row ───────────────────────────────────────────────────────── */
 .fc .fc-timegrid-all-day {
   border-color: #f0f0ef !important;
 }
 
-/* Scrollbar — minimal */
+/* ── Scrollbar ─────────────────────────────────────────────────────────── */
 .fc .fc-scroller::-webkit-scrollbar {
   width: 4px;
 }
@@ -200,4 +216,36 @@
 .fc .fc-scroller::-webkit-scrollbar-thumb {
   background: #e8e8e7;
   border-radius: 2px;
+}
+
+/* ── Animations ────────────────────────────────────────────────────────── */
+
+/* Mini calendar month grid fade */
+@keyframes miniCalIn {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.mini-cal-in {
+  animation: miniCalIn 120ms var(--ease-out) both;
+}
+
+/* Event detail popover */
+@keyframes popoverIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes backdropIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Reduced motion ────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .mini-cal-in {
+    animation: none;
+  }
+  .fc .fc-button,
+  .fc .fc-event {
+    transition: none !important;
+  }
 }
