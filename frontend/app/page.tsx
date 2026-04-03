@@ -8,7 +8,7 @@ export default function Home() {
   const { messages, loading, send } = useChat();
 
   return (
-    <div className="flex flex-col h-[calc(100vh-45px)] max-w-2xl mx-auto">
+    <div className="flex flex-col h-[calc(100vh-46px)] max-w-2xl mx-auto">
       <MessageList messages={messages} />
       <InputBar onSend={send} disabled={loading} />
     </div>

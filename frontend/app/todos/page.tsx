@@ -3,24 +3,34 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useCaptures } from "@/hooks/useCaptures";
+import { useReviewStreak } from "@/hooks/useReviewStreak";
+import { RetroDrawer } from "@/components/RetroDrawer";
 import { TYPE_CONFIG } from "@/lib/typeConfig";
 import { generateIdeaTasks, updateCaptureStage } from "@/lib/api";
 import type { Capture } from "@/lib/api";
 
+const TODAY = new Date().toISOString().slice(0, 10);
+const TOMORROW = (() => {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+})();
+
+function isDeferred(c: Capture): boolean {
+  const dt = c.metadata?.deferred_to as string | undefined;
+  return !!dt && dt > TODAY;
+}
+
 const COOK_STAGE_COLORS: Record<string, string> = {
-  seed:       "text-zinc-400 bg-zinc-100",
+  seed:       "text-stone-400 bg-stone-100",
   brewing:    "text-amber-600 bg-amber-50",
   developing: "text-blue-600 bg-blue-50",
   ready:      "text-green-600 bg-green-50",
-  parked:     "text-zinc-300 bg-zinc-50",
+  parked:     "text-stone-300 bg-stone-50",
 };
 
-const TYPE_ORDER = ["to_hit", "to_learn", "to_cook", "to_know"] as const;
-
 function SkeletonCard() {
-  return (
-    <div className="rounded-xl bg-zinc-100 animate-pulse h-14" />
-  );
+  return <div className="rounded-xl bg-stone-100 animate-pulse h-14" />;
 }
 
 function CookIdeaExpansion({ capture }: { capture: Capture }) {
@@ -41,9 +51,9 @@ function CookIdeaExpansion({ capture }: { capture: Capture }) {
   return (
     <div className="mt-1.5 flex flex-col gap-1.5">
       {threads.length > 0 && (
-        <ul className="flex flex-col gap-0.5 pl-2 border-l border-zinc-100">
+        <ul className="flex flex-col gap-0.5 pl-2 border-l border-stone-100">
           {threads.slice(0, 3).map((t, i) => (
-            <li key={i} className="text-[10px] text-zinc-400 leading-snug">{t}</li>
+            <li key={i} className="text-[10px] text-stone-400 leading-snug">{t}</li>
           ))}
         </ul>
       )}
@@ -55,7 +65,7 @@ function CookIdeaExpansion({ capture }: { capture: Capture }) {
           <button
             onClick={handleGenerateTasks}
             disabled={generating}
-            className="text-[10px] text-zinc-400 hover:text-zinc-700 transition-colors disabled:opacity-40"
+            className="text-[10px] text-stone-400 hover:text-stone-700 transition-colors disabled:opacity-40"
           >
             {generating ? "Generating…" : "→ Tasks"}
           </button>
@@ -65,12 +75,25 @@ function CookIdeaExpansion({ capture }: { capture: Capture }) {
   );
 }
 
-function CaptureCard({ capture, onDone }: { capture: Capture; onDone: (id: number, status: string) => void }) {
+function CaptureCard({
+  capture,
+  onDone,
+  onDefer,
+  onPlanToday,
+  showPlanDefer,
+}: {
+  capture: Capture;
+  onDone: (id: number, status: string) => void;
+  onDefer?: (id: number) => void;
+  onPlanToday?: (id: number) => void;
+  showPlanDefer?: boolean;
+}) {
   const config = TYPE_CONFIG[capture.capture_type as keyof typeof TYPE_CONFIG];
   const isDone = capture.status !== "active";
+  const deferred = isDeferred(capture);
 
   return (
-    <div className={`flex items-start gap-3 p-3 rounded-xl border bg-white ${isDone ? "opacity-50" : ""}`}>
+    <div className={`flex items-start gap-3 p-3 rounded-xl border border-[#e8e4db] bg-white transition-opacity ${isDone || deferred ? "opacity-50" : ""}`}>
       {config?.doneStatus ? (
         <span className="flex items-center justify-center min-w-[44px] min-h-[44px]">
           <button
@@ -78,32 +101,34 @@ function CaptureCard({ capture, onDone }: { capture: Capture; onDone: (id: numbe
             aria-checked={isDone}
             onClick={() => onDone(capture.id, isDone ? "active" : config.doneStatus)}
             className={`w-5 h-5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
-              isDone ? "bg-zinc-900 border-zinc-900" : "border-zinc-300 hover:border-zinc-500"
+              isDone ? "bg-stone-800 border-stone-800" : "border-stone-300 hover:border-stone-500"
             }`}
           >
-            {isDone && <span className="text-white text-xs">✓</span>}
+            {isDone && (
+              <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
+                <path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
           </button>
         </span>
       ) : (
         <div className="min-w-[44px] min-h-[44px] flex-shrink-0" />
       )}
+
       <div className="flex-1 min-w-0 py-2.5">
-        <p className={`text-sm text-zinc-900 ${isDone ? "line-through" : ""}`}>{capture.summary}</p>
+        <p className={`text-sm text-stone-900 leading-snug ${isDone ? "line-through" : ""}`}>{capture.summary}</p>
+
         {capture.capture_type === "to_cook" && !isDone && (
           <CookIdeaExpansion capture={capture} />
         )}
         {capture.capture_type === "to_know" && (
           <p className={`text-xs mt-1 leading-relaxed ${
-            capture.metadata?.answer
-              ? "text-zinc-500"
-              : "text-zinc-400 italic"
+            capture.metadata?.answer ? "text-stone-500" : "text-stone-400 italic"
           }`}>
-            {capture.metadata?.answer
-              ? (capture.metadata.answer as string)
-              : "Researching…"}
+            {capture.metadata?.answer ? (capture.metadata.answer as string) : "Researching…"}
           </p>
         )}
-        {capture.metadata?.url && (
+        {!!capture.metadata?.url && (
           <a
             href={capture.metadata.url as string}
             target="_blank"
@@ -113,18 +138,47 @@ function CaptureCard({ capture, onDone }: { capture: Capture; onDone: (id: numbe
             {capture.metadata.url as string}
           </a>
         )}
-        {capture.metadata?.source_title && (
-          <p className="text-xs text-zinc-400 mt-0.5">from {capture.metadata.source_title as string}</p>
-        )}
-        {capture.metadata?.topic && capture.capture_type !== "to_know" && !capture.metadata?.source_title && (
-          <p className="text-xs text-zinc-400 mt-0.5">{capture.metadata.topic as string}</p>
+        {!!capture.metadata?.source_title && (
+          <p className="text-xs text-stone-400 mt-0.5">from {capture.metadata.source_title as string}</p>
         )}
         {capture.deadline && (
-          <p className="text-xs text-zinc-400 mt-0.5">Due {capture.deadline}</p>
+          <p className={`text-xs mt-0.5 ${capture.deadline < TODAY ? "text-red-400" : "text-stone-400"}`}>
+            {capture.deadline < TODAY ? `Overdue · ${capture.deadline}` : `Due ${capture.deadline}`}
+          </p>
+        )}
+        {deferred && (
+          <p className="text-xs text-stone-300 mt-0.5">
+            Deferred · {capture.metadata.deferred_to as string}
+          </p>
+        )}
+
+        {showPlanDefer && !isDone && !deferred && (
+          <div className="flex items-center gap-2 mt-1.5">
+            {onPlanToday && (
+              <button
+                onClick={() => onPlanToday(capture.id)}
+                className="text-[10px] text-stone-500 hover:text-stone-800 transition-colors font-medium"
+              >
+                Plan today
+              </button>
+            )}
+            {onDefer && (
+              <>
+                <span className="text-stone-200">·</span>
+                <button
+                  onClick={() => onDefer(capture.id)}
+                  className="text-[10px] text-stone-400 hover:text-stone-600 transition-colors"
+                >
+                  Defer
+                </button>
+              </>
+            )}
+          </div>
         )}
       </div>
-      {config && (
-        <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 mt-2.5 ${config.bgClass}`}>
+
+      {config && !isDone && (
+        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex-shrink-0 mt-2.5 ${config.bgClass}`}>
           {config.label}
         </span>
       )}
@@ -132,47 +186,64 @@ function CaptureCard({ capture, onDone }: { capture: Capture; onDone: (id: numbe
   );
 }
 
-function Section({ type, captures, onDone }: { type: string; captures: Capture[]; onDone: (id: number, status: string) => void }) {
-  const config = TYPE_CONFIG[type as keyof typeof TYPE_CONFIG];
-  const active = captures.filter((c) => c.status === "active");
-  const done = captures.filter((c) => c.status !== "active");
-
-  if (captures.length === 0) return null;
-
+function SectionHeader({
+  label,
+  count,
+  accent,
+}: {
+  label: string;
+  count: number;
+  accent?: "red" | "amber" | "default";
+}) {
+  const colorClass =
+    accent === "red" ? "text-red-400" :
+    accent === "amber" ? "text-amber-500" :
+    "text-stone-400";
   return (
-    <section className="mb-6">
-      <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 px-1">
-        {config?.label ?? type} <span className="normal-case font-normal">({active.length} active)</span>
-      </h2>
-      <div className="flex flex-col gap-2">
-        {active.map((c) => <CaptureCard key={c.id} capture={c} onDone={onDone} />)}
-        {done.map((c) => <CaptureCard key={c.id} capture={c} onDone={onDone} />)}
-      </div>
-    </section>
+    <h2 className={`text-xs font-semibold uppercase tracking-wider mb-2 px-1 ${colorClass}`}>
+      {label} <span className="normal-case font-normal opacity-70">({count})</span>
+    </h2>
   );
 }
 
-const TODAY = new Date().toISOString().slice(0, 10);
-
 export default function TodosPage() {
-  const { captures, loading, error, refresh, markDone } = useCaptures();
+  const { captures, loading, error, refresh, markDone, deferCapture, planToday } = useCaptures();
+  const { streak, reviewedToday, markReviewDone } = useReviewStreak();
+  const [showDrawer, setShowDrawer] = useState(false);
 
+  // All non-calendar/inbox/query items
   const todos = captures.filter(
     (c) => !["calendar", "inbox", "query"].includes(c.capture_type)
   );
 
+  // Temporal buckets
   const overdue = todos.filter(
-    (c) => c.status === "active" && c.deadline && c.deadline < TODAY
+    (c) => c.status === "active" && c.deadline && c.deadline < TODAY && !isDeferred(c)
   );
+  const dueToday = todos.filter(
+    (c) => c.status === "active" && c.deadline === TODAY && !isDeferred(c)
+  );
+  const scheduled = todos.filter(
+    (c) => c.status === "active" && c.deadline && c.deadline > TODAY && !isDeferred(c)
+  );
+  const unplanned = todos.filter(
+    (c) => c.status === "active" && !c.deadline && !isDeferred(c) && c.capture_type !== "to_cook"
+  );
+  const ideas = todos.filter(
+    (c) => c.capture_type === "to_cook" && c.status === "active"
+  );
+  const deferred = todos.filter(
+    (c) => c.status === "active" && isDeferred(c)
+  );
+  const done = todos.filter((c) => c.status !== "active");
 
-  const overdueIds = new Set(overdue.map((c) => c.id));
+  // Floating = items that need a decision (for RetroDrawer)
+  const floating = [...overdue, ...unplanned];
 
-  const byType: Record<string, Capture[]> = {};
-  for (const c of todos) {
-    if (overdueIds.has(c.id)) continue; // shown in Overdue section
-    if (!byType[c.capture_type]) byType[c.capture_type] = [];
-    byType[c.capture_type].push(c);
-  }
+  // Items scheduled for tomorrow (for RetroDrawer "all clear" context)
+  const scheduledTomorrow = captures.filter(
+    (c) => c.deadline === TOMORROW && c.status === "active"
+  ).length;
 
   if (loading) {
     return (
@@ -187,10 +258,7 @@ export default function TodosPage() {
   if (error) {
     return (
       <div className="p-6 text-center mt-16 max-w-2xl mx-auto">
-        <p
-          className="text-zinc-500 text-sm cursor-pointer hover:text-zinc-700"
-          onClick={refresh}
-        >
+        <p className="text-stone-500 text-sm cursor-pointer hover:text-stone-700" onClick={refresh}>
           Couldn&apos;t load. Tap to retry.
         </p>
       </div>
@@ -200,8 +268,8 @@ export default function TodosPage() {
   if (todos.length === 0) {
     return (
       <div className="p-6 text-center mt-16 max-w-2xl mx-auto">
-        <p className="text-zinc-500 text-sm">Nothing here yet.</p>
-        <Link href="/" className="text-zinc-400 text-sm hover:text-zinc-600 mt-1 inline-block">
+        <p className="text-stone-500 text-sm">Nothing here yet.</p>
+        <Link href="/" className="text-stone-400 text-sm hover:text-stone-600 mt-1 inline-block">
           Start capturing →
         </Link>
       </div>
@@ -209,23 +277,150 @@ export default function TodosPage() {
   }
 
   return (
-    <div className="p-4 max-w-2xl mx-auto">
-      <h1 className="text-base font-semibold text-zinc-900 mb-4">To-Dos</h1>
-
-      {overdue.length > 0 && (
-        <section className="mb-6">
-          <h2 className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-2 px-1">
-            Overdue <span className="normal-case font-normal">({overdue.length})</span>
-          </h2>
-          <div className="flex flex-col gap-2">
-            {overdue.map((c) => <CaptureCard key={c.id} capture={c} onDone={markDone} />)}
+    <>
+      <div className="p-4 max-w-2xl mx-auto">
+        {/* Page header */}
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-base font-semibold text-stone-900">To-Dos</h1>
+            {streak > 0 && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium border border-amber-100">
+                {streak} day{streak !== 1 ? "s" : ""} reviewed
+              </span>
+            )}
+            {reviewedToday && (
+              <span className="text-xs text-stone-300">reviewed today</span>
+            )}
           </div>
-        </section>
-      )}
+          {floating.length > 0 && (
+            <button
+              onClick={() => setShowDrawer(true)}
+              className="text-xs px-3 py-1.5 rounded-lg bg-stone-800 text-white font-medium hover:bg-stone-700 transition-colors active:scale-[0.96]"
+            >
+              Review day ({floating.length})
+            </button>
+          )}
+          {floating.length === 0 && !reviewedToday && todos.length > 0 && (
+            <button
+              onClick={() => { markReviewDone(); }}
+              className="text-xs px-3 py-1.5 rounded-lg border border-[#e8e4db] text-stone-500 font-medium hover:bg-stone-50 transition-colors active:scale-[0.96]"
+            >
+              Mark reviewed
+            </button>
+          )}
+        </div>
 
-      {TYPE_ORDER.map((type) => (
-        <Section key={type} type={type} captures={byType[type] ?? []} onDone={markDone} />
-      ))}
-    </div>
+        {/* Overdue */}
+        {overdue.length > 0 && (
+          <section className="mb-5">
+            <SectionHeader label="Overdue" count={overdue.length} accent="red" />
+            <div className="flex flex-col gap-2">
+              {overdue.map((c) => (
+                <CaptureCard
+                  key={c.id}
+                  capture={c}
+                  onDone={markDone}
+                  onDefer={deferCapture}
+                  onPlanToday={planToday}
+                  showPlanDefer
+                />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Due today */}
+        {dueToday.length > 0 && (
+          <section className="mb-5">
+            <SectionHeader label="Today" count={dueToday.length} accent="amber" />
+            <div className="flex flex-col gap-2">
+              {dueToday.map((c) => (
+                <CaptureCard key={c.id} capture={c} onDone={markDone} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Unplanned */}
+        {unplanned.length > 0 && (
+          <section className="mb-5">
+            <SectionHeader label="Unplanned" count={unplanned.length} />
+            <div className="flex flex-col gap-2">
+              {unplanned.map((c) => (
+                <CaptureCard
+                  key={c.id}
+                  capture={c}
+                  onDone={markDone}
+                  onDefer={deferCapture}
+                  onPlanToday={planToday}
+                  showPlanDefer
+                />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Ideas (to_cook — persistent) */}
+        {ideas.length > 0 && (
+          <section className="mb-5">
+            <SectionHeader label="Ideas" count={ideas.length} />
+            <div className="flex flex-col gap-2">
+              {ideas.map((c) => (
+                <CaptureCard key={c.id} capture={c} onDone={markDone} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Scheduled */}
+        {scheduled.length > 0 && (
+          <section className="mb-5">
+            <SectionHeader label="Scheduled" count={scheduled.length} />
+            <div className="flex flex-col gap-2">
+              {scheduled.map((c) => (
+                <CaptureCard key={c.id} capture={c} onDone={markDone} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Deferred */}
+        {deferred.length > 0 && (
+          <section className="mb-5">
+            <SectionHeader label="Deferred" count={deferred.length} />
+            <div className="flex flex-col gap-2">
+              {deferred.map((c) => (
+                <CaptureCard key={c.id} capture={c} onDone={markDone} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Done */}
+        {done.length > 0 && (
+          <section className="mb-5">
+            <SectionHeader label="Done" count={done.length} />
+            <div className="flex flex-col gap-2">
+              {done.map((c) => (
+                <CaptureCard key={c.id} capture={c} onDone={markDone} />
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+
+      {/* Retro drawer */}
+      {showDrawer && (
+        <RetroDrawer
+          floating={floating}
+          scheduledTomorrow={scheduledTomorrow}
+          onDefer={deferCapture}
+          onPlanToday={planToday}
+          onLetGo={markDone}
+          onComplete={markReviewDone}
+          onClose={() => setShowDrawer(false)}
+        />
+      )}
+    </>
   );
 }

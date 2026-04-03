@@ -7,6 +7,13 @@
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
+  /* Capsule design tokens */
+  --bg-warm: #f7f5f0;
+  --surface: #ffffff;
+  --text-primary: #1c1917;
+  --text-muted: #78716c;
+  --border-warm: #e8e4db;
+
   /* FullCalendar tokens */
   --fc-border-color: #f0f0ef;
   --fc-today-bg-color: rgba(59, 130, 246, 0.03);
@@ -239,10 +246,32 @@
   to   { opacity: 1; }
 }
 
+/* ── Message bubble entry ──────────────────────────────────────────────── */
+.msg-bubble {
+  transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+/* ── Capsule input focus ───────────────────────────────────────────────── */
+.capsule-input:focus-within {
+  border-color: #a8a29e;
+  box-shadow: 0 0 0 3px rgba(168, 162, 158, 0.12);
+}
+
 /* ── Reduced motion ────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .mini-cal-in {
     animation: none;
+  }
+  .msg-bubble {
+    transition: none;
+    @starting-style {
+      opacity: 1;
+      transform: none;
+    }
   }
   .fc .fc-button,
   .fc .fc-event {

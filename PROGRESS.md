@@ -1,7 +1,7 @@
 # Capsule — Progress
 
 ## Current Status
-v2 fully functional. All 6 build plan steps complete + bulk intake + to_cook extensibility. 85 backend tests passing. 7 frontend pages live.
+Today page + card editor + AI organize shipped. Nav collapsed from 7 → 3 items. Each capture is now a living document. Build passes clean.
 
 ---
 
@@ -111,6 +111,25 @@ capsule/
 ---
 
 ## Session Log
+
+### 2026-04-03 (Session 11)
+**Completed:**
+- **Office hours design doc** — ran full `/office-hours` session for "Today" page (Todos + Timeline merge). Produced design doc at `~/.gstack/projects/duncanchang38-capsule/duncan-main-design-20260403-230638.md`. Multiple adversarial review passes (5 → 6 → 7/10). Resolved: SQL OR precedence, planToday UI gap, Library nav spec, SSR null state, SQLite UTC timezone, all-clear trigger, Done for today button placement.
+- **Today page** (`/today`) — Morning/Evening auto-mode (`getHours() < 17`), manual override toggle. Morning: "Today" section (calendar events + items planned for today) + "Carry in" (max 5 floating items). Evening: "Captured today" + "Still floating" + stats line + "Done for today" button. Full streak integration.
+- **Card editor** (`/captures/[id]`) — full-screen markdown editor per capture. Edit/preview toggle. Auto-save on 800ms debounce. Per-type placeholder text.
+- **AI Organize** — `POST /captures/{id}/organize` calls Claude with per-type system prompts. to_learn → Key Ideas/Quotes/Questions. to_cook → Core Insight/Opportunity/Next Actions. to_hit → Sub-tasks checklist. to_know → Answer/Evidence/Follow-up. Replaces notes in DB and returns to editor.
+- **Library page** (`/library`) — Ideas + Reading + Archive sections, anchor nav, `✦` indicator on captures with notes. Replaces separate /ideas, /reading, /organize pages.
+- **Nav** — 7 items → 3 (Today · Calendar · Library).
+- **Redirects** — `/todos` + `/timeline` → `/today`, `/ideas` + `/reading` + `/organize` → `/library`.
+- **DB migration** — `notes TEXT` column added (ALTER TABLE if missing, safe on existing data).
+
+**Build:** `npm run build` passes clean. 11 routes.
+
+**Gotchas:**
+- `metadata.author` is `unknown` type — needs `typeof x === "string"` guard before rendering in JSX, not just `as string` cast.
+- `GET /captures/{capture_id}` route must be declared before `GET /captures` in FastAPI or it never matches (FastAPI routes match in order).
+
+**Next:** User test with 2 friends for 1 week. Instrument manual toggle rate + evening review completion. Decide on Approach B (full redesign) based on data.
 
 ### 2026-04-03 (Session 10)
 **Completed:**

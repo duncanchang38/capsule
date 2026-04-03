@@ -10,11 +10,12 @@ def init():
     DB_PATH.parent.mkdir(exist_ok=True)
     conn = _connect()
 
-    # Check if user_id column exists; if not, recreate table
+    # Check columns; migrate if needed
     cols = {row[1] for row in conn.execute("PRAGMA table_info(captures)").fetchall()}
     if cols and "user_id" not in cols:
         conn.execute("DROP TABLE captures")
         conn.commit()
+        cols = set()
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS captures (
@@ -27,10 +28,15 @@ def init():
             metadata        TEXT NOT NULL DEFAULT '{}',
             status          TEXT NOT NULL DEFAULT 'active',
             deadline        TEXT,
+            notes           TEXT,
             created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Add notes column to existing tables that don't have it
+    if cols and "notes" not in cols:
+        conn.execute("ALTER TABLE captures ADD COLUMN notes TEXT")
     conn.commit()
     conn.close()
 
@@ -73,6 +79,36 @@ def get_capture(capture_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM captures WHERE id=?", (capture_id,)).fetchone()
     conn.close()
     return _row_to_dict(row) if row else None
+
+
+def update_schedule(
+    capture_id: int,
+    deadline: str | None,
+    time: str | None,
+    duration_mins: int | None,
+) -> None:
+    """Update a capture's scheduled deadline and/or time/duration in metadata."""
+    conn = _connect()
+    if deadline is not None:
+        conn.execute(
+            "UPDATE captures SET deadline=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (deadline, capture_id),
+        )
+    metadata_updates: dict = {}
+    if time is not None:
+        metadata_updates["time"] = time
+    if duration_mins is not None:
+        metadata_updates["duration_mins"] = duration_mins
+    if metadata_updates:
+        row = conn.execute("SELECT metadata FROM captures WHERE id=?", (capture_id,)).fetchone()
+        if row:
+            current = json.loads(row["metadata"])
+            conn.execute(
+                "UPDATE captures SET metadata=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (json.dumps({**current, **metadata_updates}), capture_id),
+            )
+    conn.commit()
+    conn.close()
 
 
 def update_metadata(capture_id: int, metadata: dict) -> None:
@@ -123,6 +159,7 @@ def get_by_view(view: str) -> list[dict]:
             SELECT * FROM captures
             WHERE capture_type NOT IN ('calendar', 'inbox', 'query')
               AND status = 'active'
+              AND json_extract(metadata, '$.sprint_index') IS NULL
             ORDER BY
               CASE
                 WHEN deadline IS NOT NULL AND deadline < date('now') THEN 0
@@ -149,6 +186,16 @@ def get_by_view(view: str) -> list[dict]:
         ).fetchall()
     conn.close()
     return [_row_to_dict(r) for r in rows]
+
+
+def update_notes(capture_id: int, notes: str) -> None:
+    conn = _connect()
+    conn.execute(
+        "UPDATE captures SET notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (notes, capture_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 def _connect() -> sqlite3.Connection:

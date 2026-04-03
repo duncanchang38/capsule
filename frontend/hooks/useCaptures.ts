@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { getCaptures, updateCaptureStatus, type Capture } from "@/lib/api";
+import {
+  getCaptures,
+  updateCaptureStatus,
+  deferCapture as deferCaptureApi,
+  scheduleCapture as scheduleCaptureApi,
+  type Capture,
+} from "@/lib/api";
 
 export function useCaptures() {
   const [captures, setCaptures] = useState<Capture[]>([]);
@@ -30,5 +36,29 @@ export function useCaptures() {
     );
   }, []);
 
-  return { captures, loading, error, refresh, markDone };
+  const deferCapture = useCallback(async (id: number, deferTo?: string) => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const deferToISO = deferTo ?? tomorrow.toISOString().slice(0, 10);
+    setCaptures((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? { ...c, metadata: { ...c.metadata, deferred_to: deferToISO } }
+          : c
+      )
+    );
+    await deferCaptureApi(id, deferTo);
+  }, []);
+
+  const planToday = useCallback(async (id: number) => {
+    const today = new Date().toISOString().slice(0, 10);
+    setCaptures((prev) =>
+      prev.map((c) =>
+        c.id === id ? { ...c, deadline: today } : c
+      )
+    );
+    await scheduleCaptureApi(id, today, null, null);
+  }, []);
+
+  return { captures, setCaptures, loading, error, refresh, markDone, deferCapture, planToday };
 }

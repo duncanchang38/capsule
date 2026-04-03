@@ -80,7 +80,7 @@ function IdeaCard({
   };
 
   return (
-    <div className={`bg-white border rounded-xl p-4 flex flex-col gap-2 ${stage === "parked" ? "opacity-50" : ""}`}>
+    <div className={`bg-white border border-[#e8e4db] rounded-xl p-4 flex flex-col gap-2 ${stage === "parked" ? "opacity-50" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <p className="text-sm font-medium text-zinc-900 leading-snug flex-1">{capture.summary}</p>
         <StagePill stage={stage} onClick={handleAdvanceStage} />
@@ -195,7 +195,7 @@ export default function IdeasPage() {
   if (loading) {
     return (
       <div className="p-4 max-w-2xl mx-auto flex flex-col gap-2">
-        {[1, 2, 3].map(i => <div key={i} className="h-20 rounded-xl bg-zinc-100 animate-pulse" />)}
+        {[1, 2, 3].map(i => <div key={i} className="h-20 rounded-xl bg-stone-100 animate-pulse" />)}
       </div>
     );
   }

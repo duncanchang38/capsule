@@ -46,17 +46,17 @@ function ReadingCard({ capture, onAbsorbed }: { capture: Capture; onAbsorbed: (i
           {capture.summary}
         </p>
         <div className="flex flex-wrap gap-x-3 mt-1">
-          {meta?.author && (
+          {!!meta?.author && (
             <span className="text-xs text-zinc-400">{meta.author as string}</span>
           )}
-          {meta?.page && (
+          {!!meta?.page && (
             <span className="text-xs text-zinc-400">p. {meta.page as string}</span>
           )}
-          {meta?.topic && (
+          {!!meta?.topic && (
             <span className="text-xs text-zinc-400">{meta.topic as string}</span>
           )}
         </div>
-        {meta?.url && (
+        {!!meta?.url && (
           <a
             href={meta.url as string}
             target="_blank"
