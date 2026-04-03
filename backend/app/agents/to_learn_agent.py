@@ -6,13 +6,13 @@ Extracts: topic, resource_type, url, author, book_title, page
 import json
 import os
 import logging
-from anthropic import AsyncAnthropicBedrock
+from anthropic import AsyncAnthropic
 from app.storage import db
 
 logger = logging.getLogger(__name__)
 
-client = AsyncAnthropicBedrock(
-    aws_region=os.environ.get("AWS_DEFAULT_REGION", "ap-southeast-2"),
+client = AsyncAnthropic(
+    ,
 )
 
 _SYSTEM = """You are an enrichment assistant for a personal knowledge capture app.
@@ -41,7 +41,7 @@ async def enrich_to_learn(capture_id: int, content: str, metadata: dict) -> None
     """Extract enrichment fields from a to_learn capture and persist."""
     try:
         response = await client.messages.create(
-            model="anthropic.claude-3-haiku-20240307-v1:0",
+            model="claude-haiku-4-5-20251001",
             max_tokens=256,
             system=_SYSTEM,
             messages=[{"role": "user", "content": content}],

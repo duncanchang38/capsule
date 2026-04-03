@@ -12,7 +12,7 @@ v1 code is preserved on the `archive/v1` branch.
 
 **Backend** (from `backend/`):
 ```bash
-CLAUDE_PLUGIN_ROOT=~/.claude/plugins/cache/everything-claude-code/everything-claude-code/1.9.0 .venv/bin/uvicorn app.main:app --reload
+ANTHROPIC_API_KEY=<your-key> .venv/bin/uvicorn app.main:app --reload
 ```
 
 **Frontend** (from `frontend/`):
@@ -21,6 +21,18 @@ npm run dev
 ```
 
 Frontend runs on `http://localhost:3000`, backend on `http://localhost:8000`. The Next.js dev server proxies `/api/*` → `localhost:8000` via `next.config.ts`.
+
+## Deployment
+
+**Backend → Railway**
+- Service root: `capsule/backend/`
+- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (set in `railway.toml`)
+- Required env var: `ANTHROPIC_API_KEY`
+- SQLite persisted to Railway volume at `/data/capsule.db` (set `DATABASE_PATH=/data/capsule.db`)
+
+**Frontend → Vercel**
+- Root directory: `capsule/frontend/`
+- Required env var: `BACKEND_URL` = your Railway service URL (e.g. `https://capsule-backend.up.railway.app`)
 
 ## Architecture (v2)
 

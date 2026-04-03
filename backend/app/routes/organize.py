@@ -4,16 +4,13 @@ POST /organize — takes raw unstructured text, returns organized markdown.
 This is a stateless, fire-once endpoint — no session, no DB storage.
 The caller decides whether to keep or discard the result.
 """
-import os
 from fastapi import APIRouter
 from pydantic import BaseModel
-from anthropic import AsyncAnthropicBedrock
+from anthropic import AsyncAnthropic
 
 router = APIRouter()
 
-client = AsyncAnthropicBedrock(
-    aws_region=os.environ.get("AWS_DEFAULT_REGION", "ap-southeast-2"),
-)
+client = AsyncAnthropic()
 
 _SYSTEM = """You are a note organizer. The user will paste raw, messy text — stream-of-consciousness,
 bullet dumps, mixed ideas, half-sentences, whatever.
@@ -44,7 +41,7 @@ async def organize(req: OrganizeRequest):
 
     try:
         response = await client.messages.create(
-            model="anthropic.claude-3-haiku-20240307-v1:0",
+            model="claude-haiku-4-5-20251001",
             max_tokens=2048,
             system=_SYSTEM,
             messages=[{"role": "user", "content": req.text}],

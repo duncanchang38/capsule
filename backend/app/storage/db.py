@@ -3,7 +3,8 @@ import json
 import os
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "capsule.db"
+_default_db = Path(__file__).parent.parent.parent / "data" / "capsule.db"
+DB_PATH = Path(os.environ.get("DATABASE_PATH", str(_default_db)))
 
 
 def init():

@@ -4,15 +4,13 @@ Called on-demand when user taps "AI Organize" in the card editor.
 """
 import os
 import logging
-from anthropic import AsyncAnthropicBedrock
+from anthropic import AsyncAnthropic
 
 logger = logging.getLogger(__name__)
 
-_client = AsyncAnthropicBedrock(
-    aws_region=os.environ.get("AWS_DEFAULT_REGION", "ap-southeast-2"),
-)
+_client = AsyncAnthropic()
 
-_MODEL = "anthropic.claude-3-haiku-20240307-v1:0"
+_MODEL = "claude-haiku-4-5-20251001"
 
 _SYSTEM_PROMPTS = {
     "to_learn": (
