@@ -547,3 +547,25 @@ Framework: pytest + pytest-asyncio. 2 E2E integration tests needed.
 | Codex Review | `/codex review` | 0 | UNAVAILABLE | — |
 | Eng Review | `/plan-eng-review` | 1 | DONE_WITH_CONCERNS | 7 issues |
 | Design Review | `/plan-design-review` | 1 | DONE_WITH_CONCERNS | 6 issues |
+
+---
+
+## Topic Pages — Deferred Items
+
+### Topic page pagination (load-more / infinite scroll)
+**What:** Add infinite scroll to `/topics/[name]` page — load more captures on scroll.
+**Why:** Backend `GET /captures?topic=&limit=&offset=` already supports it. Frontend just needs a scroll handler.
+**Context:** Not blocking v1 of topic pages. Implement once a user has enough captures in one topic to feel the need to scroll.
+**Depends on:** Topic pages shipped.
+
+### Topic enrichment for to_hit and calendar types
+**What:** Fire-and-forget enrichment (like `to_learn_agent`) that extracts a topic from task/event text.
+**Why:** Currently to_hit and calendar cards show "No related captures yet." for every card. A light Haiku call could extract topic ("Call dentist" → "health").
+**Context:** Low priority — tasks/events are ephemeral, recall matters less. But if users ask "why doesn't my task show related content," this is the fix.
+**Depends on:** Topic pages shipped, user feedback.
+
+### Denormalized topic column + index
+**What:** Add a `topic TEXT` column to the captures table, populated by migration + enrichment pass.
+**Why:** Current approach queries `json_extract(metadata,'$.topic')` on every row — full table scan. A real column gets a real index, ~10x faster.
+**Context:** Not needed at <1k captures. Flag this if the app grows to 10k+.
+**Depends on:** User growth / performance data.

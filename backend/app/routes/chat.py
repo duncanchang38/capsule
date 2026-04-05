@@ -7,7 +7,6 @@ from app.session.state_machine import SessionState, advance
 from app.agents.bucket_session import BucketSession
 from app.agents.classifier import BulkClassificationResult
 from app.agents import query_agent
-from app.storage import db
 
 router = APIRouter()
 
@@ -38,13 +37,10 @@ def _get_session(session_id: str) -> SessionState:
     return _sessions[session_id]
 
 
-def _conflict_note(deadline: str) -> str:
-    """Return a conflict warning string if other items exist on the same date."""
-    conflicts = [c for c in db.get_by_view("calendar") if c["deadline"] == deadline]
-    if not conflicts:
-        return ""
-    names = ", ".join(c["summary"] for c in conflicts[:3])
-    return f" Heads up: you already have {names} that day."
+def _extract_topic(result) -> str | None:
+    """Pull the best topic label from a classification result for the toast."""
+    meta = result.metadata or {}
+    return meta.get("topic") or meta.get("domain") or None
 
 
 @router.post("/chat")
@@ -70,34 +66,42 @@ async def chat(req: ChatRequest):
 
         if capture_to_store is not None:
             if isinstance(capture_to_store, BulkClassificationResult):
-                # Bulk save — store each item separately, fire enrichment per item
                 count = 0
                 for item in capture_to_store.items:
                     await bucket.store(item.summary, item)
                     count += 1
-                yield _sse("message", {"text": f"Saved {count} items."})
+                yield _sse("saved", {"type": "bulk", "count": count})
+
             elif capture_to_store.capture_type == "query":
-                # Queries bypass storage — answer immediately from captures context
                 answer = await query_agent.answer(req.message)
                 yield _sse("message", {"text": answer})
+
             else:
-                content = session.original_text if session.original_text else req.message
-                ack = await bucket.store(content, capture_to_store)
-                yield _sse("message", {"text": ack})
+                content = new_state.original_text or req.message
+                row_id = await bucket.store(content, capture_to_store)
+                if row_id is not None:
+                    yield _sse("saved", {
+                        "type": "capture",
+                        "id": row_id,
+                        "capture_type": capture_to_store.capture_type,
+                        "summary": capture_to_store.summary,
+                        "topic": _extract_topic(capture_to_store),
+                    })
 
         elif reply:
-            # Entering AWAITING_CONFIRMATION — check for calendar conflicts
-            if (
-                new_state.state == "AWAITING_CONFIRMATION"
-                and new_state.pending is not None
-                and new_state.pending.capture_type == "calendar"
-                and new_state.pending.deadline
-            ):
-                note = _conflict_note(new_state.pending.deadline)
-                yield _sse("message", {"text": reply + note})
-            else:
-                yield _sse("message", {"text": reply})
+            yield _sse("message", {"text": reply})
 
         yield _sse("done", {})
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@router.delete("/captures/{capture_id}")
+async def delete_capture(capture_id: int):
+    from app.storage import db
+    capture = db.get_capture(capture_id)
+    if not capture:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Capture not found")
+    db.delete_capture(capture_id)
+    return {"ok": True}

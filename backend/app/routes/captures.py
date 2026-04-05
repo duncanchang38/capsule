@@ -1,11 +1,93 @@
+import json
+import logging
 from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
+from anthropic import AsyncAnthropic
 from app.storage import db
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 VALID_STAGES = {"seed", "brewing", "developing", "ready", "parked"}
+
+_anthropic = AsyncAnthropic()
+
+_DEDUP_SYSTEM = """You are a topic normalizer for a personal knowledge capture app.
+Given a list of topic names, group near-duplicates and return one canonical name per cluster.
+
+Rules:
+- Prefer formal over colloquial ("Business Management" over "biz")
+- Title case
+- Max 3 words per topic
+- Return ONLY valid JSON: {"canonical": {"<original>": "<canonical>", ...}}
+- Every input topic must appear as a key, even if it maps to itself.
+"""
+
+
+async def _dedup_topics(topics: list[dict]) -> list[dict]:
+    """Haiku pass to normalize near-duplicate topic names. Falls back to raw list on error."""
+    if len(topics) <= 1:
+        return topics
+    try:
+        names = [t["topic"] for t in topics]
+        response = await _anthropic.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=_DEDUP_SYSTEM,
+            messages=[{"role": "user", "content": json.dumps(names)}],
+        )
+        mapping: dict = json.loads(response.content[0].text.strip()).get("canonical", {})
+
+        # Merge counts under canonical names
+        merged: dict[str, int] = {}
+        for t in topics:
+            canonical = mapping.get(t["topic"], t["topic"])
+            merged[canonical] = merged.get(canonical, 0) + t["count"]
+        return [{"topic": k, "count": v} for k, v in sorted(merged.items(), key=lambda x: -x[1])]
+    except Exception as exc:
+        logger.warning("topic dedup failed: %s", exc)
+        return topics
+
+
+@router.post("/captures/save")
+async def save_capture_direct(body: dict):
+    """Classify and save a capture directly, bypassing the chat state machine."""
+    content = (body.get("content") or "").strip()
+    notes = body.get("notes")  # optional HTML from rich text editor
+
+    if not content:
+        raise HTTPException(status_code=400, detail="content required")
+
+    from app.agents.classifier import classify_intent
+    from app.agents.bucket_session import BucketSession
+
+    result = await classify_intent(content)
+
+    if result.capture_type == "query":
+        return {"ok": True, "capture_type": "query", "summary": result.summary, "id": None}
+
+    bucket = BucketSession()
+    row_id = await bucket.store(content, result)
+
+    if row_id and notes:
+        db.update_notes(row_id, notes)
+
+    return {
+        "ok": True,
+        "id": row_id,
+        "capture_type": result.capture_type,
+        "summary": result.summary,
+        "deadline": result.deadline,
+    }
+
+
+@router.get("/captures/topics")
+async def get_topics():
+    """Return deduplicated topic list with counts."""
+    raw = db.get_topics(limit=30)
+    deduped = await _dedup_topics(raw)
+    return deduped
 
 
 @router.get("/captures/{capture_id}")
@@ -20,7 +102,10 @@ def get_capture_by_id(capture_id: int):
 def get_captures(
     view: Optional[str] = Query(default=None),
     capture_type: Optional[str] = Query(default=None),
+    topic: Optional[str] = Query(default=None),
 ):
+    if topic is not None:
+        return db.get_by_topic(topic)
     if view is not None:
         return db.get_by_view(view)
     if capture_type is not None:

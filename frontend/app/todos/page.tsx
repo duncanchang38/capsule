@@ -9,12 +9,11 @@ import { TYPE_CONFIG } from "@/lib/typeConfig";
 import { generateIdeaTasks, updateCaptureStage } from "@/lib/api";
 import type { Capture } from "@/lib/api";
 
-const TODAY = new Date().toISOString().slice(0, 10);
-const TOMORROW = (() => {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
-})();
+function localDateStr(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+const TODAY = localDateStr();
+const TOMORROW = localDateStr(new Date(Date.now() + 86_400_000));
 
 function isDeferred(c: Capture): boolean {
   const dt = c.metadata?.deferred_to as string | undefined;
@@ -91,6 +90,22 @@ function CaptureCard({
   const config = TYPE_CONFIG[capture.capture_type as keyof typeof TYPE_CONFIG];
   const isDone = capture.status !== "active";
   const deferred = isDeferred(capture);
+  const [planState, setPlanState] = useState<"idle" | "loading" | "done">("idle");
+  const [deferState, setDeferState] = useState<"idle" | "loading" | "done">("idle");
+
+  const handlePlanToday = async () => {
+    if (!onPlanToday) return;
+    setPlanState("loading");
+    await onPlanToday(capture.id);
+    setPlanState("done");
+  };
+
+  const handleDefer = async () => {
+    if (!onDefer) return;
+    setDeferState("loading");
+    await onDefer(capture.id);
+    setDeferState("done");
+  };
 
   return (
     <div className={`flex items-start gap-3 p-3 rounded-xl border border-[#e8e4db] bg-white transition-opacity ${isDone || deferred ? "opacity-50" : ""}`}>
@@ -156,20 +171,24 @@ function CaptureCard({
           <div className="flex items-center gap-2 mt-1.5">
             {onPlanToday && (
               <button
-                onClick={() => onPlanToday(capture.id)}
-                className="text-[10px] text-stone-500 hover:text-stone-800 transition-colors font-medium"
+                onClick={handlePlanToday}
+                disabled={planState !== "idle" || deferState === "done"}
+                className="text-[10px] font-medium transition-colors disabled:opacity-50"
+                style={{ color: planState === "done" ? "#16a34a" : planState === "loading" ? "#a8a29e" : "#57534e" }}
               >
-                Plan today
+                {planState === "done" ? "✓ Added to today" : planState === "loading" ? "Saving…" : "Do today"}
               </button>
             )}
-            {onDefer && (
+            {onDefer && planState !== "done" && (
               <>
                 <span className="text-stone-200">·</span>
                 <button
-                  onClick={() => onDefer(capture.id)}
-                  className="text-[10px] text-stone-400 hover:text-stone-600 transition-colors"
+                  onClick={handleDefer}
+                  disabled={deferState !== "idle" || planState === "done"}
+                  className="text-[10px] transition-colors disabled:opacity-50"
+                  style={{ color: deferState === "done" ? "#16a34a" : deferState === "loading" ? "#a8a29e" : "#a8a29e" }}
                 >
-                  Defer
+                  {deferState === "done" ? "✓ Moved to tomorrow" : deferState === "loading" ? "Saving…" : "Tomorrow"}
                 </button>
               </>
             )}

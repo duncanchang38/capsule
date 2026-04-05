@@ -19,130 +19,60 @@ def _inbox_result():
     return _result("inbox", confidence=0.2, summary="unclear", metadata={"raw": "unclear"})
 
 
-# ── AWAITING_CAPTURE transitions ───────────────────────────────────────────────
+# ── AWAITING_CAPTURE: single items store immediately ──────────────────────────
 
 @pytest.mark.asyncio
-async def test_capture_to_confirmation():
+async def test_capture_stores_immediately():
+    """Single captures now store immediately — no confirmation step."""
     classify = AsyncMock(return_value=_result("to_hit"))
     state = SessionState()
     new_state, reply, store = await advance(state, "Call dentist", classify)
-    assert new_state.state == "AWAITING_CONFIRMATION"
-    assert new_state.pending.capture_type == "to_hit"
-    assert "Sound right?" in reply
-    assert store is None
+    assert new_state.state == "AWAITING_CAPTURE"
+    assert store is not None
+    assert store.capture_type == "to_hit"
+    assert reply == ""
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ctype", ["to_learn", "to_cook", "to_know", "calendar"])
-async def test_capture_all_types_go_to_confirmation(ctype):
+async def test_all_types_store_immediately(ctype):
     classify = AsyncMock(return_value=_result(ctype))
     state = SessionState()
     new_state, reply, store = await advance(state, "some input", classify)
-    assert new_state.state == "AWAITING_CONFIRMATION"
-    assert new_state.pending.capture_type == ctype
+    assert new_state.state == "AWAITING_CAPTURE"
+    assert store is not None
+    assert store.capture_type == ctype
 
 
 @pytest.mark.asyncio
-async def test_capture_inbox_type_goes_to_clarification():
+async def test_inbox_type_stores_immediately():
+    """Low-confidence/inbox captures store immediately — no clarification step."""
     classify = AsyncMock(return_value=_inbox_result())
     state = SessionState()
     new_state, reply, store = await advance(state, "something vague", classify)
-    assert new_state.state == "INBOX_CLARIFICATION"
-    assert store is None
-    assert "?" in reply
+    assert new_state.state == "AWAITING_CAPTURE"
+    assert store is not None
+    assert store.capture_type == "inbox"
 
 
 @pytest.mark.asyncio
-async def test_capture_low_confidence_goes_to_clarification():
+async def test_low_confidence_stores_immediately():
     classify = AsyncMock(return_value=_result("to_hit", confidence=0.3))
     state = SessionState()
     new_state, reply, store = await advance(state, "maybe a task", classify)
-    assert new_state.state == "INBOX_CLARIFICATION"
-
-
-# ── AWAITING_CONFIRMATION transitions ─────────────────────────────────────────
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("word", ["yes", "yeah", "yep", "ok", "sure", "confirm"])
-async def test_confirmation_affirm_returns_store_signal(word):
-    classify = AsyncMock()
-    pending = _result("to_hit")
-    state = SessionState(
-        state="AWAITING_CONFIRMATION",
-        pending=pending,
-        original_text="Call dentist",
-    )
-    new_state, reply, store = await advance(state, word, classify)
     assert new_state.state == "AWAITING_CAPTURE"
-    assert store is pending
-    classify.assert_not_called()
+    assert store is not None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("word", ["no", "nope", "cancel", "discard"])
-async def test_confirmation_cancel_resets(word):
-    classify = AsyncMock()
-    state = SessionState(
-        state="AWAITING_CONFIRMATION",
-        pending=_result(),
-        original_text="some text",
-    )
-    new_state, reply, store = await advance(state, word, classify)
+async def test_query_type_returns_immediately_no_store():
+    classify = AsyncMock(return_value=_result("query", summary="Show my tasks"))
+    state = SessionState()
+    new_state, reply, store = await advance(state, "show my tasks", classify)
     assert new_state.state == "AWAITING_CAPTURE"
-    assert store is None
-    assert reply == "Discarded."
-    classify.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_confirmation_correction_reclassifies():
-    reclassified = _result("to_learn", summary="Read Atomic Habits")
-    classify = AsyncMock(return_value=reclassified)
-    state = SessionState(
-        state="AWAITING_CONFIRMATION",
-        pending=_result("to_hit"),
-        original_text="Read Atomic Habits",
-        retries=0,
-    )
-    new_state, reply, store = await advance(state, "make it a book", classify)
-    assert new_state.state == "AWAITING_CONFIRMATION"
-    assert new_state.pending.capture_type == "to_learn"
-    assert new_state.retries == 1
-    assert store is None
-    classify.assert_called_once_with("Read Atomic Habits", correction_hint="make it a book")
-
-
-@pytest.mark.asyncio
-async def test_confirmation_max_retries_resets():
-    classify = AsyncMock(return_value=_result())
-    state = SessionState(
-        state="AWAITING_CONFIRMATION",
-        pending=_result(),
-        original_text="some text",
-        retries=2,  # one more hit = 3 = MAX_RETRIES
-    )
-    new_state, reply, store = await advance(state, "still not right", classify)
-    assert new_state.state == "AWAITING_CAPTURE"
-    assert store is None
-    assert "start over" in reply.lower()
-
-
-# ── INBOX_CLARIFICATION transitions ───────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_inbox_clarification_reclassifies_to_confirmation():
-    reclassified = _result("to_hit", summary="Call dentist")
-    classify = AsyncMock(return_value=reclassified)
-    state = SessionState(
-        state="INBOX_CLARIFICATION",
-        original_text="call dentist",
-    )
-    new_state, reply, store = await advance(state, "it's a task", classify)
-    assert new_state.state == "AWAITING_CONFIRMATION"
-    assert new_state.pending.capture_type == "to_hit"
-    assert "Sound right?" in reply
-    assert store is None
-    classify.assert_called_once_with("call dentist", correction_hint="it's a task")
+    assert store is not None
+    assert store.capture_type == "query"
+    assert reply == ""
 
 
 # ── AWAITING_BULK_CONFIRMATION transitions ────────────────────────────────────
@@ -229,7 +159,6 @@ async def test_bulk_empty_result_does_not_enter_bulk_state():
     bulk_classify = AsyncMock(return_value=BulkClassificationResult(items=[]))
     state = SessionState()
     new_state, reply, store = await advance(state, BOOK_LIST, classify, bulk_classify)
-    # Should report error, stay in AWAITING_CAPTURE
     assert new_state.state == "AWAITING_CAPTURE"
     assert store is None
 
@@ -255,5 +184,4 @@ def test_detect_bulk_single_item_not_bulk():
 
 def test_detect_bulk_two_items_not_bulk():
     from app.agents.classifier import detect_bulk
-    # Only 2 items — below threshold
     assert detect_bulk("- [ ] Item one\n- [ ] Item two\n") is False

@@ -57,6 +57,24 @@ export interface Capture {
   updated_at: string;
 }
 
+export interface SaveResult {
+  ok: boolean;
+  id: number | null;
+  capture_type: string;
+  summary: string;
+  deadline: string | null;
+}
+
+export async function saveCapture(content: string, notes?: string): Promise<SaveResult> {
+  const res = await fetch("/api/captures/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, notes }),
+  });
+  if (!res.ok) throw new Error("Failed to save capture");
+  return res.json();
+}
+
 export async function getCaptures(): Promise<Capture[]> {
   const res = await fetch("/api/captures");
   if (!res.ok) throw new Error("Failed to fetch captures");
@@ -159,4 +177,25 @@ export async function generateIdeaTasks(id: number): Promise<number> {
   if (!res.ok) return 0;
   const data = await res.json();
   return data.count ?? 0;
+}
+
+export async function deleteCapture(id: number): Promise<void> {
+  await fetch(`/api/captures/${id}`, { method: "DELETE" });
+}
+
+export interface Topic {
+  topic: string;
+  count: number;
+}
+
+export async function getTopics(): Promise<Topic[]> {
+  const res = await fetch("/api/captures/topics");
+  if (!res.ok) throw new Error("Failed to fetch topics");
+  return res.json();
+}
+
+export async function getCapturesByTopic(topic: string): Promise<Capture[]> {
+  const res = await fetch(`/api/captures?topic=${encodeURIComponent(topic)}`);
+  if (!res.ok) throw new Error("Failed to fetch topic captures");
+  return res.json();
 }

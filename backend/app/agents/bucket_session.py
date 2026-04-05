@@ -1,6 +1,9 @@
 import asyncio
+import re
 from app.agents.classifier import ClassificationResult
 from app.storage import db
+
+_URL_RE = re.compile(r'https?://\S+')
 
 COMPLETION_MAP = {
     "to_hit":   "archive",
@@ -12,23 +15,19 @@ COMPLETION_MAP = {
     "query":    None,   # noop — never stored
 }
 
-ACK_MESSAGES = {
-    "to_hit":   "Added to your to-dos.",
-    "calendar": "Added to your calendar.",
-    "to_learn": "Added to your reading list.",
-    "to_cook":  "Idea saved.",
-    "to_know":  "Question captured.",
-    "inbox":    "Saved for later.",
-}
-
 
 class BucketSession:
-    async def store(self, content: str, result: ClassificationResult) -> str:
+    async def store(self, content: str, result: ClassificationResult) -> int | None:
+        """Store a capture and fire async enrichment tasks. Returns row_id or None."""
         completion_type = COMPLETION_MAP.get(result.capture_type)
 
         if completion_type is None:
-            # query type or unknown — no storage
-            return "Got it."
+            return None
+
+        # Seed notes with original content if it contains URLs or is multi-line
+        initial_notes: str | None = None
+        if _URL_RE.search(content) or "\n" in content.strip():
+            initial_notes = content.strip()
 
         row_id = db.save_capture(
             capture_type=result.capture_type,
@@ -37,6 +36,7 @@ class BucketSession:
             summary=result.summary,
             metadata=result.metadata,
             deadline=result.deadline,
+            notes=initial_notes,
         )
 
         if result.capture_type == "to_learn":
@@ -54,4 +54,4 @@ class BucketSession:
             from app.agents.cook_agent import expand_idea
             asyncio.create_task(expand_idea(row_id, content, result.metadata))
 
-        return ACK_MESSAGES.get(result.capture_type, "Saved.")
+        return row_id

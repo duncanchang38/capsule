@@ -6,14 +6,12 @@ Extracts: topic, resource_type, url, author, book_title, page
 import json
 import os
 import logging
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropicBedrock
 from app.storage import db
 
 logger = logging.getLogger(__name__)
 
-client = AsyncAnthropic(
-    ,
-)
+client = AsyncAnthropicBedrock()
 
 _SYSTEM = """You are an enrichment assistant for a personal knowledge capture app.
 Given the raw text of a to-learn capture, extract metadata as JSON.
@@ -41,7 +39,7 @@ async def enrich_to_learn(capture_id: int, content: str, metadata: dict) -> None
     """Extract enrichment fields from a to_learn capture and persist."""
     try:
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="anthropic.claude-3-haiku-20240307-v1:0",
             max_tokens=256,
             system=_SYSTEM,
             messages=[{"role": "user", "content": content}],

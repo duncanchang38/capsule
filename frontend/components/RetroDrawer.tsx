@@ -83,23 +83,26 @@ function FloatingItem({
         ) : (
           <>
             <button
-              onClick={() => run("planned today", () => onPlanToday(capture.id))}
+              onClick={() => run("added to today", () => onPlanToday(capture.id))}
               className="text-xs px-2.5 py-1 rounded-lg bg-stone-800 text-white font-medium hover:bg-stone-700 transition-colors active:scale-[0.95]"
+              title="Schedule for today"
             >
-              Plan today
+              Do today
             </button>
             <button
-              onClick={() => run("deferred", () => onDefer(capture.id))}
+              onClick={() => run("moved to tomorrow", () => onDefer(capture.id))}
               className="text-xs px-2.5 py-1 rounded-lg bg-stone-100 text-stone-600 font-medium hover:bg-stone-200 transition-colors active:scale-[0.95]"
+              title="Push to tomorrow"
             >
-              Defer
+              Tomorrow
             </button>
             {cfg?.doneStatus && (
               <button
-                onClick={() => run("let go", () => onLetGo(capture.id, cfg.doneStatus))}
+                onClick={() => run("archived", () => onLetGo(capture.id, cfg.doneStatus))}
                 className="text-xs px-2.5 py-1 rounded-lg text-stone-400 hover:text-stone-600 transition-colors active:scale-[0.95]"
+                title="Remove from your list"
               >
-                Let go
+                Archive
               </button>
             )}
           </>

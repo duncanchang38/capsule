@@ -9,10 +9,22 @@ export interface Message {
   text: string;
 }
 
+export interface SavedCapture {
+  type: "capture" | "bulk";
+  id?: number;
+  capture_type?: string;
+  summary?: string;
+  topic?: string | null;
+  count?: number;
+}
+
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
+  const [savedCapture, setSavedCapture] = useState<SavedCapture | null>(null);
   const sessionId = useRef(`session-${Date.now()}`);
+
+  const clearSaved = useCallback(() => setSavedCapture(null), []);
 
   const send = useCallback(async (text: string) => {
     const userMsg: Message = {
@@ -26,15 +38,21 @@ export function useChat() {
 
     const assistantId = crypto.randomUUID();
     let accumulated = "";
-
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantId, role: "assistant", text: "" },
-    ]);
+    let hasAssistantMsg = false;
 
     try {
       for await (const { event, data } of streamChat(text, sessionId.current)) {
+        if (event === "saved") {
+          setSavedCapture(data as unknown as SavedCapture);
+        }
         if (event === "message" && typeof data.text === "string") {
+          if (!hasAssistantMsg) {
+            hasAssistantMsg = true;
+            setMessages((prev) => [
+              ...prev,
+              { id: assistantId, role: "assistant", text: "" },
+            ]);
+          }
           accumulated += data.text;
           setMessages((prev) =>
             prev.map((m) =>
@@ -49,5 +67,5 @@ export function useChat() {
     }
   }, []);
 
-  return { messages, loading, send };
+  return { messages, loading, send, savedCapture, clearSaved };
 }

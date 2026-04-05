@@ -50,14 +50,15 @@ def save_capture(
     metadata: dict,
     deadline: str | None = None,
     user_id: str = "default",
+    notes: str | None = None,
 ) -> int:
     conn = _connect()
     cur = conn.execute(
         """
-        INSERT INTO captures (user_id, capture_type, completion_type, content, summary, metadata, deadline)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO captures (user_id, capture_type, completion_type, content, summary, metadata, deadline, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (user_id, capture_type, completion_type, content, summary, json.dumps(metadata), deadline),
+        (user_id, capture_type, completion_type, content, summary, json.dumps(metadata), deadline, notes),
     )
     conn.commit()
     row_id = cur.lastrowid
@@ -197,6 +198,52 @@ def update_notes(capture_id: int, notes: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def delete_capture(capture_id: int) -> None:
+    conn = _connect()
+    conn.execute("DELETE FROM captures WHERE id=?", (capture_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_topics(limit: int = 30) -> list[dict]:
+    """Return distinct topics with capture counts, ordered by count desc."""
+    conn = _connect()
+    rows = conn.execute(
+        """
+        SELECT json_extract(metadata, '$.topic') AS topic, COUNT(*) AS count
+        FROM captures
+        WHERE capture_type IN ('to_learn', 'to_cook', 'to_know')
+          AND json_extract(metadata, '$.topic') IS NOT NULL
+          AND json_extract(metadata, '$.topic') != ''
+          AND status != 'archived'
+        GROUP BY topic
+        ORDER BY count DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [{"topic": r["topic"], "count": r["count"]} for r in rows]
+
+
+def get_by_topic(topic: str, limit: int = 50, offset: int = 0) -> list[dict]:
+    """Return captures matching a topic name (case-insensitive)."""
+    conn = _connect()
+    rows = conn.execute(
+        """
+        SELECT * FROM captures
+        WHERE LOWER(json_extract(metadata, '$.topic')) = LOWER(?)
+          AND capture_type IN ('to_learn', 'to_cook', 'to_know')
+          AND status != 'archived'
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        (topic, limit, offset),
+    ).fetchall()
+    conn.close()
+    return [_row_to_dict(r) for r in rows]
 
 
 def _connect() -> sqlite3.Connection:

@@ -9,14 +9,12 @@ import json
 import os
 import logging
 import asyncio
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropicBedrock
 from app.storage import db
 
 logger = logging.getLogger(__name__)
 
-client = AsyncAnthropic(
-    ,
-)
+client = AsyncAnthropicBedrock()
 
 _SYSTEM = """You are an assistant that extracts concrete, actionable tasks from books.
 
@@ -54,7 +52,7 @@ async def generate_book_actions(
 
     try:
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="anthropic.claude-3-haiku-20240307-v1:0",
             max_tokens=512,
             system=_SYSTEM,
             messages=[{"role": "user", "content": "\n".join(prompt_parts)}],

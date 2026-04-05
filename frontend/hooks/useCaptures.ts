@@ -51,14 +51,12 @@ export function useCaptures() {
   }, []);
 
   const planToday = useCallback(async (id: number) => {
-    const today = new Date().toISOString().slice(0, 10);
-    setCaptures((prev) =>
-      prev.map((c) =>
-        c.id === id ? { ...c, deadline: today } : c
-      )
-    );
+    // Use local date so it matches how the user thinks about "today"
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     await scheduleCaptureApi(id, today, null, null);
-  }, []);
+    await refresh();
+  }, [refresh]);
 
   return { captures, setCaptures, loading, error, refresh, markDone, deferCapture, planToday };
 }

@@ -2,12 +2,10 @@ import json
 import re
 import os
 from typing import Optional
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropicBedrock
 from pydantic import BaseModel
 
-client = AsyncAnthropic(
-    ,
-)
+client = AsyncAnthropicBedrock()
 
 SYSTEM_PROMPT = """You are a silent intent classifier for a personal capture app.
 
@@ -111,7 +109,7 @@ No explanation, no markdown.
 
 async def bulk_classify(text: str) -> BulkClassificationResult:
     response = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="anthropic.claude-3-haiku-20240307-v1:0",
         max_tokens=8192,
         system=BULK_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": text}],
@@ -130,7 +128,7 @@ async def classify_intent(text: str, correction_hint: str | None = None) -> Clas
         user_content = f"{text}\n\n[Correction hint: {correction_hint}]"
 
     response = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="anthropic.claude-3-haiku-20240307-v1:0",
         max_tokens=256,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
