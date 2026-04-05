@@ -547,7 +547,7 @@ export default function CaptureEditorPage() {
       {(capture.capture_type === "to_know" || capture.capture_type === "to_learn") &&
         (capture.metadata?.answer || (capture.metadata?.search_queries as string[] | undefined)?.length) && (
         <div className="mb-5 rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 space-y-3">
-          {capture.metadata?.answer && (
+          {!!capture.metadata?.answer && (
             <div>
               <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider mb-1">AI Answer</p>
               <p className="text-sm text-stone-700 leading-snug whitespace-pre-wrap">
@@ -768,12 +768,12 @@ function BubbleBtn({ active, onClick, label, bold, italic, strike }: {
   );
 }
 
-function ToolbarBtn({ children, onClick, active, title }: {
-  children: React.ReactNode; onClick?: () => void; active?: boolean; title?: string;
+function ToolbarBtn({ children, onClick, active, disabled, title }: {
+  children: React.ReactNode; onClick?: () => void; active?: boolean; disabled?: boolean; title?: string;
 }) {
   return (
-    <button onClick={onClick} title={title}
-      className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${active ? "bg-stone-100 text-stone-800" : "text-stone-400 hover:text-stone-700 hover:bg-stone-50"}`}>
+    <button onClick={onClick} title={title} disabled={disabled}
+      className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${active ? "bg-stone-100 text-stone-800" : "text-stone-400 hover:text-stone-700 hover:bg-stone-50"} disabled:opacity-40 disabled:cursor-not-allowed`}>
       {children}
     </button>
   );

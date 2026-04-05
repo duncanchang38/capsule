@@ -69,7 +69,7 @@ function Section({
                 (c.metadata?.stage || c.notes)
                   ? (
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {c.metadata?.stage && (
+                      {!!c.metadata?.stage && (
                         <span className="text-[10px] text-stone-300 capitalize">{c.metadata.stage as string}</span>
                       )}
                       {c.notes && (
@@ -271,7 +271,7 @@ export default function LibraryPage() {
                           capture={c}
                           rightExtras={
                             <div className="flex items-center gap-1.5 flex-shrink-0">
-                              {c.metadata?.stage && (
+                              {!!c.metadata?.stage && (
                                 <span className="text-[10px] text-stone-300 capitalize">{c.metadata.stage as string}</span>
                               )}
                               {c.notes && (
