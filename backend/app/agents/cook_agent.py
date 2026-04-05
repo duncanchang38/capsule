@@ -14,12 +14,10 @@ Metadata written back:
 import json
 import os
 import logging
-from anthropic import AsyncAnthropicBedrock
 from app.storage import db
+from app.agents.client import anthropic_client as client, HAIKU
 
 logger = logging.getLogger(__name__)
-
-client = AsyncAnthropicBedrock()
 
 _SYSTEM = """You are an idea development assistant.
 
@@ -46,7 +44,7 @@ async def expand_idea(capture_id: int, content: str, metadata: dict) -> None:
     """Expand a to_cook idea with threads and domain. Updates metadata in-place."""
     try:
         response = await client.messages.create(
-            model="anthropic.claude-3-haiku-20240307-v1:0",
+            model=HAIKU,
             max_tokens=512,
             system=_SYSTEM,
             messages=[{"role": "user", "content": content}],
@@ -64,5 +62,15 @@ async def expand_idea(capture_id: int, content: str, metadata: dict) -> None:
             "domain": domain,
             "stage": "seed",
         })
+
+        # Extract topic from domain for similarity check (use first segment, e.g. "consumer app")
+        topic = metadata.get("topic") or (domain.split("/")[0].strip() if domain else None)
+        if topic:
+            from app.agents.similarity_agent import check_and_suggest_merge
+            import asyncio
+            asyncio.create_task(
+                check_and_suggest_merge(capture_id, content, topic, "to_cook")
+            )
+
     except Exception as exc:
         logger.warning("cook_agent failed for capture %d: %s", capture_id, exc)

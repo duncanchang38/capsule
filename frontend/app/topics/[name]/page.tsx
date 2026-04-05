@@ -1,41 +1,48 @@
 "use client";
 
-import { use } from "react";
+import { use, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { useTopicCaptures } from "@/hooks/useTopicCaptures";
-import { TYPE_CONFIG } from "@/lib/typeConfig";
-import type { Capture } from "@/lib/api";
-
-function CaptureRow({ capture }: { capture: Capture }) {
-  const cfg = TYPE_CONFIG[capture.capture_type as keyof typeof TYPE_CONFIG];
-  return (
-    <Link
-      href={`/captures/${capture.id}`}
-      className="flex items-start gap-3 py-2.5 border-b border-stone-50 last:border-0 hover:bg-stone-50 rounded-lg px-2 -mx-2 transition-colors"
-    >
-      <div
-        className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5"
-        style={{ backgroundColor: cfg?.color ?? "#a8a29e" }}
-      />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-stone-800 leading-snug">{capture.summary}</p>
-        {typeof capture.metadata?.author === "string" && (
-          <p className="text-[10px] text-stone-400 mt-0.5">{capture.metadata.author}</p>
-        )}
-      </div>
-      {capture.notes && (
-        <span className="text-[10px] text-stone-300 flex-shrink-0" title="Has notes">✦</span>
-      )}
-    </Link>
-  );
-}
+import { renameTopic } from "@/lib/api";
+import { CaptureListRow } from "@/components/CaptureListRow";
+import { useCaptures } from "@/hooks/useCaptures";
 
 export default function TopicPage({ params }: { params: Promise<{ name: string }> }) {
   const { name } = use(params);
   const topic = decodeURIComponent(name);
   const router = useRouter();
   const { captures, loading, error, refresh } = useTopicCaptures(topic);
+  const { markDone, deleteCapture, deferCapture, planToday } = useCaptures();
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(topic);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEdit = () => {
+    setDraft(topic);
+    setEditing(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  };
+
+  const commit = async () => {
+    const trimmed = draft.trim();
+    if (!trimmed || trimmed === topic) { setEditing(false); return; }
+    setSaving(true);
+    try {
+      await renameTopic(topic, trimmed);
+      router.replace(`/topics/${encodeURIComponent(trimmed)}`);
+    } catch {
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") commit();
+    if (e.key === "Escape") setEditing(false);
+  };
 
   if (loading) {
     return (
@@ -52,10 +59,7 @@ export default function TopicPage({ params }: { params: Promise<{ name: string }
   if (error) {
     return (
       <div className="p-6 text-center mt-16 max-w-2xl mx-auto">
-        <p
-          className="text-stone-500 text-sm cursor-pointer hover:text-stone-700"
-          onClick={refresh}
-        >
+        <p className="text-stone-500 text-sm cursor-pointer hover:text-stone-700" onClick={refresh}>
           Couldn&apos;t load. Tap to retry.
         </p>
       </div>
@@ -71,9 +75,32 @@ export default function TopicPage({ params }: { params: Promise<{ name: string }
         ←
       </button>
 
-      <h1 className="text-2xl font-bold text-stone-900 leading-tight">{topic}</h1>
-      <p className="text-xs text-stone-400 mt-1 mb-6">
-        {captures.length} {captures.length === 1 ? "capture" : "captures"}
+      {/* Editable topic name */}
+      <div className="flex items-center gap-2 mb-1">
+        {editing ? (
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={onKeyDown}
+            disabled={saving}
+            className="text-2xl font-bold text-stone-900 leading-tight bg-transparent border-b-2 border-stone-400 focus:outline-none focus:border-stone-700 w-full"
+            autoFocus
+          />
+        ) : (
+          <button
+            onClick={startEdit}
+            className="text-2xl font-bold text-stone-900 leading-tight hover:text-stone-600 transition-colors text-left"
+            title="Rename topic"
+          >
+            {topic}
+          </button>
+        )}
+        {saving && <span className="text-[11px] text-stone-400 italic flex-shrink-0">saving…</span>}
+      </div>
+      <p className="text-xs text-stone-400 mb-6">
+        {captures.length} {captures.length === 1 ? "capture" : "captures"} · tap name to rename
       </p>
 
       {captures.length === 0 ? (
@@ -82,7 +109,16 @@ export default function TopicPage({ params }: { params: Promise<{ name: string }
         <>
           <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
             {captures.map((c) => (
-              <CaptureRow key={c.id} capture={c} />
+              <CaptureListRow
+                key={c.id}
+                capture={c}
+                handlers={{ onPlanToday: planToday, onDefer: deferCapture, onDone: markDone, onDelete: deleteCapture }}
+                meta={
+                  typeof c.metadata?.author === "string"
+                    ? <p className="text-[10px] text-stone-400 mt-0.5">{c.metadata.author as string}</p>
+                    : undefined
+                }
+              />
             ))}
           </div>
           {captures.length === 1 && (

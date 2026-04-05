@@ -165,11 +165,23 @@ export async function updateNotes(id: number, notes: string): Promise<void> {
   });
 }
 
-export async function organizeNotes(id: number): Promise<string> {
+export interface OrganizeResult {
+  notes: string;
+  mode: "single" | "cluster";
+  cluster_size: number;
+  merge_suggestion?: {
+    capture_id: number;
+    summary: string;
+    topic?: string;
+    reason: string;
+    detail?: string;
+  } | null;
+}
+
+export async function organizeNotes(id: number): Promise<OrganizeResult> {
   const res = await fetch(`/api/captures/${id}/organize`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to organize");
-  const data = await res.json();
-  return data.notes as string;
+  return res.json();
 }
 
 export async function generateIdeaTasks(id: number): Promise<number> {
@@ -180,7 +192,7 @@ export async function generateIdeaTasks(id: number): Promise<number> {
 }
 
 export async function deleteCapture(id: number): Promise<void> {
-  await fetch(`/api/captures/${id}`, { method: "DELETE" });
+  await updateCaptureStatus(id, "deleted");
 }
 
 export interface Topic {
@@ -198,4 +210,42 @@ export async function getCapturesByTopic(topic: string): Promise<Capture[]> {
   const res = await fetch(`/api/captures?topic=${encodeURIComponent(topic)}`);
   if (!res.ok) throw new Error("Failed to fetch topic captures");
   return res.json();
+}
+
+export async function getRelatedCaptures(id: number, limit = 5): Promise<Capture[]> {
+  const res = await fetch(`/api/captures/${id}/related?limit=${limit}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.related ?? [];
+}
+
+export async function dismissMergeSuggestion(id: number): Promise<void> {
+  await fetch(`/api/captures/${id}/dismiss-merge`, { method: "PATCH" });
+}
+
+export async function mergeCapture(sourceId: number, targetId: number): Promise<void> {
+  const res = await fetch(`/api/captures/${sourceId}/merge-into/${targetId}`, { method: "POST" });
+  if (!res.ok) throw new Error("Merge failed");
+}
+
+export async function reEnrich(id: number): Promise<void> {
+  await fetch(`/api/captures/${id}/re-enrich`, { method: "POST" });
+}
+
+export async function restoreCapture(id: number): Promise<void> {
+  await fetch(`/api/captures/${id}/restore`, { method: "PATCH" });
+}
+
+export async function clearDeleted(): Promise<void> {
+  const res = await fetch("/api/captures/deleted", { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to clear deleted items");
+}
+
+export async function renameTopic(from: string, to: string): Promise<void> {
+  const res = await fetch("/api/captures/topics/rename", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from, to }),
+  });
+  if (!res.ok) throw new Error("Failed to rename topic");
 }

@@ -96,6 +96,14 @@ async def chat(req: ChatRequest):
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+@router.delete("/captures/deleted")
+def clear_deleted():
+    """Permanently delete all captures in the deletion bin."""
+    from app.storage import db
+    db.clear_deleted()
+    return {"ok": True}
+
+
 @router.delete("/captures/{capture_id}")
 async def delete_capture(capture_id: int):
     from app.storage import db

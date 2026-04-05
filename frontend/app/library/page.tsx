@@ -3,39 +3,30 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useCaptures } from "@/hooks/useCaptures";
-import { getTopics } from "@/lib/api";
-import { TYPE_CONFIG } from "@/lib/typeConfig";
+import { getTopics, clearDeleted } from "@/lib/api";
+import { CaptureListRow } from "@/components/CaptureListRow";
+import type { CaptureRowHandlers } from "@/components/CaptureListRow";
 import type { Capture, Topic } from "@/lib/api";
 
-function CaptureRow({ capture }: { capture: Capture }) {
-  const cfg = TYPE_CONFIG[capture.capture_type as keyof typeof TYPE_CONFIG];
-  const stage = capture.metadata?.stage as string | undefined;
+const ARCHIVE_TTL_DAYS = 30; // must match backend ARCHIVE_TTL_DAYS
 
-  return (
-    <Link
-      href={`/captures/${capture.id}`}
-      className="flex items-start gap-3 py-2.5 border-b border-stone-50 last:border-0 hover:bg-stone-50 rounded-lg px-2 -mx-2 transition-colors"
-    >
-      <div
-        className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5"
-        style={{ backgroundColor: cfg?.color ?? "#a8a29e" }}
-      />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-stone-800 leading-snug">{capture.summary}</p>
-        {typeof capture.metadata?.author === "string" && (
-          <p className="text-[10px] text-stone-400 mt-0.5">{capture.metadata.author}</p>
-        )}
-      </div>
-      <div className="flex items-center gap-1.5 flex-shrink-0">
-        {stage && (
-          <span className="text-[10px] text-stone-300 capitalize">{stage}</span>
-        )}
-        {capture.notes && (
-          <span className="text-[10px] text-stone-300" title="Has notes">✦</span>
-        )}
-      </div>
-    </Link>
-  );
+function getLocalToday(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function deletedDaysLeft(capture: Capture): number | null {
+  const deletedAt = capture.metadata?.deleted_at as string | undefined;
+  if (!deletedAt) return null;
+  const expiresAt = new Date(deletedAt);
+  expiresAt.setDate(expiresAt.getDate() + ARCHIVE_TTL_DAYS);
+  const msLeft = expiresAt.getTime() - Date.now();
+  return Math.max(0, Math.ceil(msLeft / (1000 * 60 * 60 * 24)));
+}
+
+function isDeferred(c: Capture): boolean {
+  const dt = c.metadata?.deferred_to as string | undefined;
+  return !!dt && dt > getLocalToday();
 }
 
 function Section({
@@ -43,11 +34,13 @@ function Section({
   label,
   captures,
   emptyText,
+  handlers,
 }: {
   id: string;
   label: string;
   captures: Capture[];
   emptyText: string;
+  handlers?: CaptureRowHandlers;
 }) {
   return (
     <section id={id} className="mb-8">
@@ -59,7 +52,35 @@ function Section({
         <p className="text-sm text-stone-400 py-2">{emptyText}</p>
       ) : (
         <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
-          {captures.map((c) => <CaptureRow key={c.id} capture={c} />)}
+          {captures.map((c) => (
+            <CaptureListRow
+              key={c.id}
+              capture={c}
+              handlers={handlers}
+              dimmed={isDeferred(c)}
+              meta={(() => {
+                const author = typeof c.metadata?.author === "string" ? c.metadata.author as string : null;
+                const url = typeof c.metadata?.url === "string" ? c.metadata.url as string : null;
+                const domain = url ? (() => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return null; } })() : null;
+                const sub = author || domain;
+                return sub ? <p className="text-[10px] text-stone-400 mt-0.5">{sub}</p> : undefined;
+              })()}
+              rightExtras={
+                (c.metadata?.stage || c.notes)
+                  ? (
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {c.metadata?.stage && (
+                        <span className="text-[10px] text-stone-300 capitalize">{c.metadata.stage as string}</span>
+                      )}
+                      {c.notes && (
+                        <span className="text-[10px] text-stone-300" title="Has notes">✦</span>
+                      )}
+                    </div>
+                  )
+                  : undefined
+              }
+            />
+          ))}
         </div>
       )}
     </section>
@@ -99,10 +120,13 @@ function TopicChips({ topics, loading }: { topics: Topic[]; loading: boolean }) 
 }
 
 export default function LibraryPage() {
-  const { captures, loading: capturesLoading, error, refresh } = useCaptures();
+  const { captures, loading: capturesLoading, error, refresh, markDone, deleteCapture, deferCapture, planToday } = useCaptures();
   const [topics, setTopics] = useState<Topic[]>([]);
   const [topicsLoading, setTopicsLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [clearConfirm, setClearConfirm] = useState<"idle" | "first" | "second">("idle");
+  const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
     getTopics()
@@ -124,11 +148,14 @@ export default function LibraryPage() {
         )
       : list;
 
-  const ideas = filterCaptures(captures.filter((c) => c.capture_type === "to_cook"));
-  const reading = filterCaptures(captures.filter((c) => c.capture_type === "to_learn"));
+  const sortActiveFirst = (list: Capture[]) =>
+    [...list].sort((a, b) => (isDeferred(a) ? 1 : 0) - (isDeferred(b) ? 1 : 0));
+
+  const ideas = sortActiveFirst(filterCaptures(captures.filter((c) => c.capture_type === "to_cook" && c.status === "active")));
+  const reading = sortActiveFirst(filterCaptures(captures.filter((c) => c.capture_type === "to_learn" && c.status === "active")));
   const archive = filterCaptures(
     captures.filter(
-      (c) => !["inbox", "query", "calendar"].includes(c.capture_type) && c.status !== "active"
+      (c) => !["inbox", "query", "calendar"].includes(c.capture_type) && c.status === "deleted"
     )
   );
 
@@ -190,16 +217,160 @@ export default function LibraryPage() {
             <p className="text-sm text-stone-400 py-4 text-center">Nothing matches &ldquo;{query}&rdquo;</p>
           ) : (
             <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
-              {searchResults.map((c) => <CaptureRow key={c.id} capture={c} />)}
+              {searchResults.map((c) => <CaptureListRow key={c.id} capture={c} />)}
             </div>
           )}
         </section>
       ) : (
         <>
           <TopicChips topics={topics} loading={topicsLoading} />
-          <Section id="ideas" label="Ideas" captures={ideas} emptyText="No ideas yet." />
-          <Section id="reading" label="Reading" captures={reading} emptyText="No reading yet." />
-          <Section id="archive" label="Archive" captures={archive} emptyText="Nothing archived yet." />
+          <Section
+            id="ideas"
+            label="Ideas"
+            captures={ideas}
+            emptyText="No ideas yet."
+            handlers={{ onPlanToday: planToday, onDefer: deferCapture, onDone: markDone, onDelete: deleteCapture }}
+          />
+          <Section
+            id="reading"
+            label="Reading"
+            captures={reading}
+            emptyText="No reading yet."
+            handlers={{ onPlanToday: planToday, onDefer: deferCapture, onDone: markDone, onDelete: deleteCapture }}
+          />
+
+          {/* Collapsible archive */}
+          <section id="archive" className="mb-8">
+            <button
+              onClick={() => setArchiveOpen((o) => !o)}
+              className="w-full flex items-center justify-between mb-3 group"
+            >
+              <h2 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                Archive
+                <span className="normal-case font-normal ml-1 opacity-70">({archive.length})</span>
+              </h2>
+              <svg
+                width="12" height="12" viewBox="0 0 12 12" fill="none"
+                className={`text-stone-300 transition-transform duration-150 ${archiveOpen ? "rotate-180" : ""}`}
+              >
+                <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            {archiveOpen && (
+              archive.length === 0 ? (
+                <p className="text-sm text-stone-400 py-2">Nothing archived yet.</p>
+              ) : (
+                <>
+                  <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1 mb-3">
+                    {archive.map((c) => {
+                      const daysLeft = deletedDaysLeft(c);
+                      const urgent = daysLeft !== null && daysLeft <= 3;
+                      return (
+                        <CaptureListRow
+                          key={c.id}
+                          capture={c}
+                          rightExtras={
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {c.metadata?.stage && (
+                                <span className="text-[10px] text-stone-300 capitalize">{c.metadata.stage as string}</span>
+                              )}
+                              {c.notes && (
+                                <span className="text-[10px] text-stone-300" title="Has notes">✦</span>
+                              )}
+                              {daysLeft !== null && (
+                                <span
+                                  className={`text-[10px] font-medium tabular-nums ${
+                                    urgent ? "text-red-400" : "text-stone-300"
+                                  }`}
+                                  title={`Deleted in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`}
+                                >
+                                  {daysLeft}d
+                                </span>
+                              )}
+                            </div>
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={() => setClearConfirm("first")}
+                    className="w-full py-2 text-[11px] text-stone-300 hover:text-red-400 transition-colors"
+                  >
+                    Clear archive
+                  </button>
+                </>
+              )
+            )}
+          </section>
+
+          {/* Clear archive confirmation modal */}
+          {clearConfirm !== "idle" && (
+            <div
+              className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4"
+              onClick={() => setClearConfirm("idle")}
+            >
+              <div
+                className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {clearConfirm === "first" ? (
+                  <>
+                    <h3 className="text-base font-semibold text-stone-900 mb-2">Clear archive?</h3>
+                    <p className="text-sm text-stone-500 mb-5">
+                      All {archive.length} archived item{archive.length !== 1 ? "s" : ""} will be permanently deleted. This cannot be undone.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setClearConfirm("idle")}
+                        className="flex-1 py-2.5 rounded-xl border border-stone-200 text-sm text-stone-600 hover:bg-stone-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => setClearConfirm("second")}
+                        className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-medium hover:bg-red-600"
+                      >
+                        Delete all
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="text-base font-semibold text-stone-900 mb-2">Are you sure?</h3>
+                    <p className="text-sm text-stone-500 mb-5">
+                      There is no way to recover these items. They will be gone permanently.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setClearConfirm("idle")}
+                        className="flex-1 py-2.5 rounded-xl border border-stone-200 text-sm text-stone-600 hover:bg-stone-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        disabled={clearing}
+                        onClick={async () => {
+                          setClearing(true);
+                          try {
+                            await clearDeleted();
+                            await refresh();
+                            setClearConfirm("idle");
+                            setArchiveOpen(false);
+                          } finally {
+                            setClearing(false);
+                          }
+                        }}
+                        className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
+                      >
+                        {clearing ? "Deleting…" : "Yes, delete forever"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

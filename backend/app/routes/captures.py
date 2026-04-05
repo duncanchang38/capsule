@@ -1,17 +1,15 @@
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
-from anthropic import AsyncAnthropic
 from app.storage import db
+from app.agents.client import anthropic_client as _anthropic, HAIKU
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 VALID_STAGES = {"seed", "brewing", "developing", "ready", "parked"}
-
-_anthropic = AsyncAnthropic()
 
 _DEDUP_SYSTEM = """You are a topic normalizer for a personal knowledge capture app.
 Given a list of topic names, group near-duplicates and return one canonical name per cluster.
@@ -24,15 +22,24 @@ Rules:
 - Every input topic must appear as a key, even if it maps to itself.
 """
 
+# In-memory cache: keyed on frozenset of (topic, count) tuples from the raw DB result.
+# Invalidated automatically when the raw list changes (new capture, rename, etc.).
+_dedup_cache: dict[frozenset, list[dict]] = {}
+
 
 async def _dedup_topics(topics: list[dict]) -> list[dict]:
     """Haiku pass to normalize near-duplicate topic names. Falls back to raw list on error."""
     if len(topics) <= 1:
         return topics
+
+    cache_key = frozenset((t["topic"], t["count"]) for t in topics)
+    if cache_key in _dedup_cache:
+        return _dedup_cache[cache_key]
+
     try:
         names = [t["topic"] for t in topics]
         response = await _anthropic.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=HAIKU,
             max_tokens=512,
             system=_DEDUP_SYSTEM,
             messages=[{"role": "user", "content": json.dumps(names)}],
@@ -44,7 +51,9 @@ async def _dedup_topics(topics: list[dict]) -> list[dict]:
         for t in topics:
             canonical = mapping.get(t["topic"], t["topic"])
             merged[canonical] = merged.get(canonical, 0) + t["count"]
-        return [{"topic": k, "count": v} for k, v in sorted(merged.items(), key=lambda x: -x[1])]
+        result = [{"topic": k, "count": v} for k, v in sorted(merged.items(), key=lambda x: -x[1])]
+        _dedup_cache[cache_key] = result
+        return result
     except Exception as exc:
         logger.warning("topic dedup failed: %s", exc)
         return topics
@@ -90,6 +99,17 @@ async def get_topics():
     return deduped
 
 
+@router.patch("/captures/topics/rename")
+def rename_topic(body: dict):
+    """Rename a topic across all captures that share it."""
+    old = (body.get("from") or "").strip()
+    new = (body.get("to") or "").strip()
+    if not old or not new:
+        raise HTTPException(status_code=400, detail="from and to are required")
+    count = db.rename_topic(old, new)
+    return {"updated": count}
+
+
 @router.get("/captures/{capture_id}")
 def get_capture_by_id(capture_id: int):
     capture = db.get_capture(capture_id)
@@ -119,6 +139,20 @@ def update_status(capture_id: int, body: dict):
     if not status:
         return {"error": "status required"}
     db.update_status(capture_id, status)
+
+    # Stamp deleted_at when moving to deletion bin; clear it on restore.
+    # Done states (done, absorbed, answered) are permanent — no TTL timestamp.
+    capture = db.get_capture(capture_id)
+    if capture:
+        meta = dict(capture.get("metadata") or {})
+        if status == "active":
+            meta.pop("deleted_at", None)
+        elif status == "deleted":
+            # Only stamp once so the 30-day clock isn't reset on re-delete
+            if "deleted_at" not in meta:
+                meta["deleted_at"] = datetime.now(timezone.utc).isoformat()
+        db.update_metadata(capture_id, meta)
+
     return {"ok": True}
 
 
@@ -261,18 +295,145 @@ def update_notes(capture_id: int, body: dict):
     return {"ok": True}
 
 
+@router.get("/captures/{capture_id}/related")
+def get_related(capture_id: int, limit: int = 5):
+    """Return captures related by entity overlap (GraphRAG). Excludes self."""
+    capture = db.get_capture(capture_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    related = db.get_related_by_entities(capture_id, limit=limit, min_score=0.3)
+    return {"related": related}
+
+
 @router.post("/captures/{capture_id}/organize")
 async def organize_notes(capture_id: int):
-    """AI-organize the capture's existing notes into structured markdown."""
+    """
+    AI-organize the capture's notes.
+    If the capture belongs to an entity cluster, synthesize the whole cluster.
+    Falls back to single-capture organize when no cluster is found.
+    Also checks for merge candidates (user-triggered, so no auto-background cost).
+    """
     capture = db.get_capture(capture_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     if not capture.get("notes", "").strip():
         raise HTTPException(status_code=400, detail="No notes to organize")
-    from app.agents.organize_agent import organize_capture
-    organized = await organize_capture(capture)
+
+    cluster = db.get_entity_cluster(capture_id, min_score=0.4, limit=6)
+
+    if cluster and len(cluster) > 1:
+        from app.agents.organize_agent import synthesize_cluster
+        organized = await synthesize_cluster(cluster)
+        mode = "cluster"
+        cluster_size = len(cluster)
+    else:
+        from app.agents.organize_agent import organize_capture
+        organized = await organize_capture(capture)
+        mode = "single"
+        cluster_size = 1
+
     db.update_notes(capture_id, organized)
-    return {"ok": True, "notes": organized}
+
+    # Merge suggestion — only run when user explicitly clicks Organize (not on save)
+    # Uses entity overlap + topic match (free) first, LLM fallback only if no match
+    merge_suggestion = None
+    if capture.get("capture_type") not in ("calendar", "inbox", "query"):
+        try:
+            from app.agents.similarity_agent import check_and_suggest_merge
+            topic = (capture.get("metadata") or {}).get("topic")
+            await check_and_suggest_merge(
+                capture_id, capture["summary"], topic, capture["capture_type"]
+            )
+            # Read back the updated capture to get the stored merge_suggestion (if any)
+            updated = db.get_capture(capture_id)
+            if updated:
+                merge_suggestion = (updated.get("metadata") or {}).get("merge_suggestion")
+        except Exception as exc:
+            logger.warning("merge check failed for capture %d: %s", capture_id, exc)
+
+    return {"ok": True, "notes": organized, "mode": mode, "cluster_size": cluster_size,
+            "merge_suggestion": merge_suggestion}
+
+
+@router.patch("/captures/{capture_id}/dismiss-merge")
+def dismiss_merge_suggestion(capture_id: int):
+    """Remove the merge_suggestion from a capture's metadata."""
+    capture = db.get_capture(capture_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    meta = dict(capture.get("metadata") or {})
+    meta.pop("merge_suggestion", None)
+    db.update_metadata(capture_id, meta)
+    return {"ok": True}
+
+
+@router.post("/captures/{capture_id}/merge-into/{target_id}")
+def merge_capture(capture_id: int, target_id: int):
+    """
+    Merge capture_id into target_id:
+    - Append capture_id's notes to target_id's notes (if any)
+    - Archive capture_id
+    - Remove merge_suggestion from both
+    """
+    try:
+        source = db.get_capture(capture_id)
+        target = db.get_capture(target_id)
+        if not source or not target:
+            raise HTTPException(status_code=404, detail="Capture not found")
+
+        # Append source notes to target notes
+        source_notes = (source.get("notes") or "").strip()
+        if source_notes:
+            existing = (target.get("notes") or "").strip()
+            separator = "\n\n---\n\n" if existing else ""
+            db.update_notes(target_id, existing + separator + source_notes)
+
+        # Archive the source
+        db.update_status(capture_id, "archived")
+
+        # Clean up merge_suggestion from both
+        for cid, cap in [(capture_id, source), (target_id, target)]:
+            meta = dict(cap.get("metadata") or {})
+            meta.pop("merge_suggestion", None)
+            db.update_metadata(cid, meta)
+
+        return {"ok": True, "merged_into": target_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("merge_capture failed: capture_id=%d target_id=%d", capture_id, target_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/captures/{capture_id}/re-enrich")
+async def re_enrich(capture_id: int):
+    """Re-run enrichment for a capture (useful when title/topic was wrong on first pass)."""
+    capture = db.get_capture(capture_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    import asyncio
+    if capture["capture_type"] == "to_learn":
+        from app.agents.to_learn_agent import enrich_to_learn
+        asyncio.create_task(enrich_to_learn(capture_id, capture["content"], capture.get("metadata") or {}))
+    elif capture["capture_type"] == "to_know":
+        from app.agents.to_know_agent import research_to_know
+        asyncio.create_task(research_to_know(capture_id, capture["content"], capture.get("metadata") or {}))
+    else:
+        return {"ok": False, "detail": "re-enrich not supported for this type"}
+    return {"ok": True}
+
+
+@router.patch("/captures/{capture_id}/restore")
+def restore_capture(capture_id: int):
+    """Restore an archived capture back to active status."""
+    capture = db.get_capture(capture_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    db.update_status(capture_id, "active")
+    meta = dict(capture.get("metadata") or {})
+    meta.pop("archived_at", None)
+    db.update_metadata(capture_id, meta)
+    return {"ok": True}
 
 
 @router.post("/captures/{capture_id}/tasks")

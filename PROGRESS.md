@@ -1,7 +1,7 @@
 # Capsule — Progress
 
 ## Current Status
-Today page + card editor + AI organize shipped. Nav collapsed from 7 → 3 items. Each capture is now a living document. Build passes clean.
+Done/Delete split complete. Today tab has Scheduled/Pending sections with inline circle-done. Deleted bin with 30-day countdown. Build passes clean.
 
 ---
 
@@ -131,6 +131,27 @@ capsule/
 
 **Next:** User test with 2 friends for 1 week. Instrument manual toggle rate + evening review completion. Decide on Approach B (full redesign) based on data.
 
+### 2026-04-05 (Session 12)
+**Completed:**
+- **Classifier hallucination fix** — bare URL pre-processing guard in `classifier.py`: bare URLs bypass AI entirely, always return `to_learn` with raw URL as summary. Added CRITICAL rule to SYSTEM_PROMPT: "A URL is ALWAYS to_learn, never to_know." Eliminated "What is the capital of Bhutan?" hallucination on Instagram links.
+- **Jina full content extraction** — `_fetch_page_title_jina` now returns `(title, content_snippet)` tuple. Scraped content (≤2000 chars) is injected into the AI enrichment prompt as `--- Scraped page content ---` section. AI now works from real page text, not just URL domain.
+- **HTML meta extraction** — `_TitleParser` now extracts `og:description` and `name="description"` alongside `og:title`. `_fetch_page_title_html` returns `(title, description)` tuple.
+- **Social URL fix** — Removed Instagram (and most platforms) from `_OPAQUE_SOCIAL_DOMAINS`. Only `twitter.com` and `x.com` remain (truly JS-rendered). Instagram returns full post content via og:title/og:description to plain curl.
+- **og:title length guard** — Titles >120 chars demoted to `page_content` (AI input) not `page_title` (display). Handles Instagram captions that are full post text.
+- **Social attribution stripping** — `_SOCIAL_ATTRIBUTION_RE` strips "Username on Instagram: '" prefix from og:title before display.
+- **URL-only fallback** — Opaque social early-return and general fallback both use raw URL instead of platform name label (e.g. "Instagram Post").
+- **Frontend: bare URL H1 fix** — `buildEditorContent` now detects H1 containing only a bare URL (via `_headingText` + `_isBareUrl`) and replaces it with enriched summary. Fixes LangChain blog showing link as doc title.
+- **Delayed re-fetch** — `useCaptures` re-fetches 3.5s after mount to pick up async enrichment results without manual refresh.
+- **Bug fix: `db.update_summary` not called for enriched_topic-only case** — When enrichment has a concise AI topic but no fetchable page_title (404, SPA, timeout), summary column was staying as raw URL. Fixed: `elif enriched_topic and enriched_topic != url: db.update_summary(capture_id, enriched_topic)`.
+
+**Gotchas:**
+- Instagram og:title is often the full post caption (1700+ chars). Must demote to page_content, not use as display title.
+- `_SOCIAL_ATTRIBUTION_RE` must strip before the 120-char length check, or cleaned titles still exceed limit.
+- `db.update_summary` and `db.update_metadata` are separate calls — enrichment must call both to keep UI and structured fields in sync.
+- docs.anthropic.com SPA pages (computer-use, streaming, message-batches) may return empty on concurrent requests but work fine individually — likely rate/bot protection, not a code bug.
+
+**Next:** Monitor enrichment quality on new captures. Investigate docs.anthropic.com SPA pages if they continue returning empty.
+
 ### 2026-04-03 (Session 10)
 **Completed:**
 - **Calendar/todos coherence model** — calendar now shows ALL capture types with deadlines (not just calendar+to_hit); todos sorted by urgency (overdue → due soon → no date); "Overdue" section at top of todos page; done button in EventPopover
@@ -224,6 +245,27 @@ User experienced the core product pain live — captured 4 items (YC app + 3 res
 - Design doc updated at `~/.gstack/projects/duncanchang38-capsule/duncan-main-design-20260402-000331.md`
 
 **Next:** Build the classifier. Implementation order: Storage → Classifier (parallel) → Bucket session → State machine → Tests
+
+### 2026-04-05 (Session 9)
+**Completed:**
+- Fixed `DELETE /captures/archive` returning 422 — FastAPI route ordering conflict; static `/captures/deleted` now registered before parameterized `/{id}` in chat.py
+- Fixed button-in-button hydration error in CaptureListRow — inner circle checkbox changed from `<button>` to `<div>`
+- Removed overscroll "advance to next tab" feature (too buggy) — stripped wheel/touch handlers and NextHint component
+- Renamed Archive → Deleted bin with 30-day TTL model: `status = 'deleted'` + `deleted_at` metadata; hard delete only in Deleted bin or after 30 days
+- `deleteCapture` in useCaptures optimistically stamps `deleted_at` for immediate countdown display
+- Today tab split into "Scheduled today" (circle tap-to-done, green+strikethrough, stays visible) and "Pending" sections
+- Inline circle tap on Scheduled today: `onCheckDone` toggles done/active without removing item; green row treatment via `scheduledHandlers`
+- Deleted tab: countdown always shows in red with bin icon, fallback to 30d for items without timestamp
+- Later tab: explanatory text at top ("Items you've pushed to a future date...")
+- Selection toolbar updated: Archive → Done + Delete with separate buttons
+- All pages (Library, Topics, Todos, Retro) updated to use `onDone`/`onDelete` instead of `onLetGo`
+- Fixed stale `plannedToday`/`donePlannedToday` references in today/page.tsx
+
+**Gotchas:**
+- FastAPI router ordering matters: `DELETE /captures/deleted` must be registered (or imported) BEFORE `DELETE /captures/{id}` — otherwise FastAPI matches "deleted" as an integer ID and returns 422
+- `setCaptures` must be exposed from `useCaptures` for parent state sync in `onRestoreActive` without a full refresh
+
+**Next:** QA the circle tap flow end-to-end; consider adding restore-from-deleted (undo) in the Deleted bin
 
 ### 2026-04-02 (Session 7)
 **Completed:**

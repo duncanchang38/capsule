@@ -6,11 +6,9 @@ The caller decides whether to keep or discard the result.
 """
 from fastapi import APIRouter
 from pydantic import BaseModel
-from anthropic import AsyncAnthropic
+from app.agents.client import anthropic_client as client, HAIKU
 
 router = APIRouter()
-
-client = AsyncAnthropic()
 
 _SYSTEM = """You are a note organizer. The user will paste raw, messy text — stream-of-consciousness,
 bullet dumps, mixed ideas, half-sentences, whatever.
@@ -41,7 +39,7 @@ async def organize(req: OrganizeRequest):
 
     try:
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=HAIKU,
             max_tokens=2048,
             system=_SYSTEM,
             messages=[{"role": "user", "content": req.text}],

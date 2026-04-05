@@ -7,30 +7,43 @@ and writes it back to metadata.answer. The Todos UI surfaces it under the questi
 import json
 import os
 import logging
-from anthropic import AsyncAnthropicBedrock
 from app.storage import db
+from app.agents.client import anthropic_client as client, HAIKU
 
 logger = logging.getLogger(__name__)
 
-client = AsyncAnthropicBedrock()
-
 _SYSTEM = """You are a research assistant. The user has captured a question they want answered.
-Provide a clear, concise answer — 2-5 sentences for simple questions, a short structured breakdown
-for complex ones. Use bullet points only if the answer genuinely has distinct parts.
-Do not pad the response. End with the most important takeaway if relevant."""
+
+Return ONLY valid JSON with two fields:
+{
+  "answer": "<concise answer — 2-5 sentences for simple questions, short structured breakdown for complex ones. Use bullet points only if the answer has genuinely distinct parts. Do not pad. End with the most important takeaway if relevant.>",
+  "search_queries": ["<query 1>", "<query 2>", "<query 3>"]
+}
+
+search_queries: 3 specific Google search queries the user could run to go deeper.
+- Make them concrete and search-ready, not generic ("Japan visa requirements 2025" not "Japan visa")
+- Vary the angle: one factual, one comparative or how-to, one recent/news if relevant
+- No explanation, no markdown outside the JSON."""
 
 
 async def research_to_know(capture_id: int, question: str, metadata: dict) -> None:
-    """Research the answer to a captured question and store it in metadata.answer."""
+    """Research the answer and generate search queries. One LLM call, stored in metadata."""
     try:
         response = await client.messages.create(
-            model="anthropic.claude-3-haiku-20240307-v1:0",
-            max_tokens=512,
+            model=HAIKU,
+            max_tokens=600,
             system=_SYSTEM,
             messages=[{"role": "user", "content": question}],
         )
-        answer = response.content[0].text.strip()
-        merged = {**metadata, "answer": answer}
+        raw = response.content[0].text.strip()
+        data = json.loads(raw)
+        answer = data.get("answer", "").strip()
+        search_queries = data.get("search_queries", [])
+        if isinstance(search_queries, list):
+            search_queries = [q for q in search_queries if isinstance(q, str)][:4]
+        else:
+            search_queries = []
+        merged = {**metadata, "answer": answer, "search_queries": search_queries}
         db.update_metadata(capture_id, merged)
     except Exception as exc:
         logger.warning("to_know research failed for capture %d: %s", capture_id, exc)

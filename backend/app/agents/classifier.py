@@ -2,10 +2,10 @@ import json
 import re
 import os
 from typing import Optional
-from anthropic import AsyncAnthropicBedrock
 from pydantic import BaseModel
+from app.agents.client import anthropic_client as client, HAIKU
 
-client = AsyncAnthropicBedrock()
+_BARE_URL_RE = re.compile(r'^\s*https?://\S+\s*$')
 
 SYSTEM_PROMPT = """You are a silent intent classifier for a personal capture app.
 
@@ -25,6 +25,7 @@ Rules:
 - summary: a clean, concise restatement of what the user said (1 sentence, no filler)
 - deadline: ISO date string (YYYY-MM-DD) if a specific date is present in the input, else null
 - confidence: 0.0–1.0 — how sure you are
+- CRITICAL: A URL (with or without surrounding text) is ALWAYS to_learn, never to_know. Do not invent a question just because you see a link you cannot read. Use the URL itself as the summary if there is no other text.
 
 Metadata per type (include only the fields for the classified type):
 - to_hit:   { "priority": "high"|"normal"|null }
@@ -109,7 +110,7 @@ No explanation, no markdown.
 
 async def bulk_classify(text: str) -> BulkClassificationResult:
     response = await client.messages.create(
-        model="anthropic.claude-3-haiku-20240307-v1:0",
+        model=HAIKU,
         max_tokens=8192,
         system=BULK_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": text}],
@@ -123,12 +124,26 @@ async def bulk_classify(text: str) -> BulkClassificationResult:
 
 
 async def classify_intent(text: str, correction_hint: str | None = None) -> ClassificationResult:
+    # Bare URL with no context: skip AI entirely to prevent hallucination.
+    # The model cannot read the URL content and will invent summaries and types.
+    # Enrichment agent handles further enrichment after storage.
+    if _BARE_URL_RE.match(text) and not correction_hint:
+        url = text.strip()
+        return ClassificationResult(
+            capture_type="to_learn",
+            summary=url,
+            deadline=None,
+            confidence=0.95,
+            metadata={"resource_type": "other", "url": url, "topic": None,
+                      "author": None, "book_title": None, "page": None},
+        )
+
     user_content = text
     if correction_hint:
         user_content = f"{text}\n\n[Correction hint: {correction_hint}]"
 
     response = await client.messages.create(
-        model="anthropic.claude-3-haiku-20240307-v1:0",
+        model=HAIKU,
         max_tokens=256,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],

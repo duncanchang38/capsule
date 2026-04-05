@@ -10,10 +10,8 @@ Does NOT store anything.
 import os
 import json
 from datetime import date
-from anthropic import AsyncAnthropicBedrock
 from app.storage import db
-
-client = AsyncAnthropicBedrock()
+from app.agents.client import anthropic_client as client, HAIKU
 
 _SYSTEM = """You are a personal assistant for a knowledge capture app called Capsule.
 The user stores tasks, questions, ideas, learning resources, and calendar events.
@@ -67,7 +65,7 @@ async def answer(query: str) -> str:
 
     try:
         response = await client.messages.create(
-            model="anthropic.claude-3-haiku-20240307-v1:0",
+            model=HAIKU,
             max_tokens=512,
             system=_SYSTEM,
             messages=[

@@ -10,12 +10,10 @@ Returns the count of tasks created.
 import json
 import os
 import logging
-from anthropic import AsyncAnthropicBedrock
 from app.storage import db
+from app.agents.client import anthropic_client as client, HAIKU
 
 logger = logging.getLogger(__name__)
-
-client = AsyncAnthropicBedrock()
 
 _SYSTEM = """You are an execution assistant. The user has an idea they want to act on.
 
@@ -44,7 +42,7 @@ async def generate_idea_tasks(source_id: int, content: str, metadata: dict) -> i
 
     try:
         response = await client.messages.create(
-            model="anthropic.claude-3-haiku-20240307-v1:0",
+            model=HAIKU,
             max_tokens=512,
             system=_SYSTEM,
             messages=[{"role": "user", "content": "\n".join(prompt_parts)}],

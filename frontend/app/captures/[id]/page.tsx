@@ -11,11 +11,59 @@ import Link2 from "@tiptap/extension-link";
 import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
 import Typography from "@tiptap/extension-typography";
-import { getCapture, updateNotes, organizeNotes, getCapturesByTopic, deleteCapture } from "@/lib/api";
+import { getCapture, updateNotes, organizeNotes, getRelatedCaptures, updateCaptureStatus, deferCapture as deferCaptureApi, scheduleCapture, dismissMergeSuggestion, mergeCapture, reEnrich } from "@/lib/api";
 import { TYPE_CONFIG } from "@/lib/typeConfig";
 import type { Capture } from "@/lib/api";
 
 const RELATED_TYPES = new Set(["to_learn", "to_cook", "to_know"]);
+
+/** True if a string is a bare URL (http/https, no surrounding text). */
+function _isBareUrl(s: string): boolean {
+  return /^https?:\/\/\S+$/.test(s.trim());
+}
+
+/**
+ * Extract the text content of the first heading tag, stripping inner HTML.
+ * Returns null if the string doesn't start with a heading.
+ */
+function _headingText(html: string): string | null {
+  const m = html.match(/^<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i);
+  if (!m) return null;
+  // Strip any inner tags (e.g. <a href="...">url</a>) to get plain text
+  return m[1].replace(/<[^>]+>/g, "").trim();
+}
+
+/**
+ * Build the initial editor HTML for a capture.
+ * Rules (in priority order):
+ *  1. No notes → <h1>summary</h1>
+ *  2. Empty heading → inject summary into the heading
+ *  3. Heading whose text is a bare URL → replace with summary (URL link stays in body)
+ *  4. Heading with real content → use as-is
+ *  5. No heading → prepend <h1>summary</h1>
+ */
+function buildEditorContent(notes: string | null | undefined, summary: string): string {
+  const raw = notes?.trim() ?? "";
+  if (!raw) return `<h1>${summary}</h1>`;
+
+  // Empty heading at start → fill it with summary
+  if (/^<h[1-6][^>]*>\s*<\/h[1-6]>/i.test(raw)) {
+    return raw.replace(/^(<h[1-6][^>]*>)\s*(<\/h[1-6]>)/i, `$1${summary}$2`);
+  }
+
+  if (/^<h[1-6]/i.test(raw)) {
+    const headingText = _headingText(raw);
+    // Heading contains only a bare URL → swap it for the human summary
+    if (headingText && _isBareUrl(headingText)) {
+      return raw.replace(/^(<h[1-6][^>]*>)[\s\S]*?(<\/h[1-6]>)/i, `$1${summary}$2`);
+    }
+    // Heading has real content → use as-is
+    return raw;
+  }
+
+  // No heading at all → prepend one
+  return `<h1>${summary}</h1>${raw}`;
+}
 
 function formatDate(raw: string): string {
   const d = new Date(raw.replace(" ", "T"));
@@ -31,19 +79,18 @@ function RelatedSection({ capture }: { capture: Capture }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!topic) { setLoading(false); return; }
-    getCapturesByTopic(topic)
-      .then((all) => setRelated(all.filter((c) => c.id !== capture.id).slice(0, 5)))
+    getRelatedCaptures(capture.id, 5)
+      .then(setRelated)
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [topic, capture.id]);
+  }, [capture.id]);
 
-  if (!topic) return null;
+  if (!loading && related.length === 0) return null;
 
   return (
     <div className="mt-10 pt-6 border-t border-stone-100">
       <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-3">
-        Related · {topic}
+        {topic ? `Related · ${topic}` : "Related"}
       </h3>
       {loading ? (
         <div className="flex flex-col gap-2">
@@ -64,14 +111,111 @@ function RelatedSection({ capture }: { capture: Capture }) {
               );
             })}
           </div>
-          <Link href={`/topics/${encodeURIComponent(topic)}`}
-            className="text-xs text-stone-400 hover:text-stone-600 mt-3 block transition-colors">
-            See all {topic} →
-          </Link>
+          {topic && (
+            <Link href={`/topics/${encodeURIComponent(topic)}`}
+              className="text-xs text-stone-400 hover:text-stone-600 mt-3 block transition-colors">
+              See all {topic} →
+            </Link>
+          )}
         </>
       )}
     </div>
   );
+}
+
+interface MergeSuggestion {
+  capture_id: number;
+  summary: string;
+  topic?: string;
+  reason: "topic_match" | "llm_similarity";
+  detail?: string;
+}
+
+function MergeSuggestionBanner({
+  captureId,
+  suggestion,
+  onDismiss,
+  onMerged,
+}: {
+  captureId: number;
+  suggestion: MergeSuggestion;
+  onDismiss: () => void;
+  onMerged: () => void;
+}) {
+  const [status, setStatus] = useState<"idle" | "merging" | "done" | "error">("idle");
+  const router = useRouter();
+
+  const handleMerge = async () => {
+    setStatus("merging");
+    try {
+      await mergeCapture(captureId, suggestion.capture_id);
+      setStatus("done");
+      onMerged();
+      setTimeout(() => router.replace(`/captures/${suggestion.capture_id}`), 800);
+    } catch {
+      setStatus("error");
+    }
+  };
+
+  const handleDismiss = async () => {
+    await dismissMergeSuggestion(captureId);
+    onDismiss();
+  };
+
+  return (
+    <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold text-amber-700 mb-0.5">Related capture found</p>
+          <p className="text-xs text-amber-600 leading-snug">
+            &ldquo;{suggestion.summary}&rdquo;
+            {suggestion.topic && (
+              <span className="ml-1 opacity-70">· {suggestion.topic}</span>
+            )}
+          </p>
+          {suggestion.detail && (
+            <p className="text-[10px] text-amber-500 mt-1">{suggestion.detail}</p>
+          )}
+        </div>
+        <button
+          onClick={handleDismiss}
+          className="text-amber-300 hover:text-amber-500 flex-shrink-0 mt-0.5 transition-colors"
+          aria-label="Dismiss"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </button>
+      </div>
+      {status === "error" && (
+        <p className="text-[10px] text-red-500 mt-2">Something went wrong. Try again.</p>
+      )}
+      <div className="flex gap-2 mt-3">
+        <Link
+          href={`/captures/${suggestion.capture_id}`}
+          className="flex-1 py-1.5 rounded-lg border border-amber-200 text-amber-700 text-xs font-medium text-center hover:bg-amber-100 transition-colors"
+        >
+          View
+        </Link>
+        <button
+          onClick={handleMerge}
+          disabled={status === "merging" || status === "done"}
+          className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            status === "done"
+              ? "bg-green-600 text-white"
+              : "bg-amber-700 text-white hover:bg-amber-800 disabled:opacity-60"
+          }`}
+        >
+          {status === "merging" ? "Merging…" : status === "done" ? "Merged ✓" : "Merge into it"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function getLocalToday(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 export default function CaptureEditorPage() {
@@ -82,7 +226,10 @@ export default function CaptureEditorPage() {
   const [capture, setCapture] = useState<Capture | null>(null);
   const [loading, setLoading] = useState(true);
   const [organizing, setOrganizing] = useState(false);
+  const [actionStatus, setActionStatus] = useState<"idle" | "saving">("idle");
   const [organizePreview, setOrganizePreview] = useState<string | null>(null);
+  const [organizeClusterSize, setOrganizeClusterSize] = useState(1);
+  const [mergeSuggestion, setMergeSuggestion] = useState<MergeSuggestion | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [bubblePos, setBubblePos] = useState<{ top: number; left: number } | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -140,41 +287,103 @@ export default function CaptureEditorPage() {
     setLoading(true);
     setCapture(null);
     if (editor) editor.commands.clearContent();
+
+    let enrichPollTimer: ReturnType<typeof setTimeout> | null = null;
+
     getCapture(id)
       .then((c) => {
         setCapture(c);
+        setMergeSuggestion((c.metadata?.merge_suggestion as MergeSuggestion) ?? null);
         if (editor) {
-          const content = c.notes?.trim()
-            ? c.notes
-            : `<h1>${c.summary}</h1>`;
-          editor.commands.setContent(content, false);
+          editor.commands.setContent(buildEditorContent(c.notes, c.summary));
+        }
+        // If enrichment hasn't finished yet (no topic), re-fetch after 4 s to pick
+        // up the async-written metadata (topic, search_queries, link_title, etc.)
+        const needsEnrichPoll =
+          c.capture_type === "to_learn" &&
+          !c.metadata?.topic &&
+          !c.metadata?.search_queries;
+        if (needsEnrichPoll) {
+          enrichPollTimer = setTimeout(() => {
+            getCapture(id).then((fresh) => {
+              setCapture(fresh);
+              setMergeSuggestion((fresh.metadata?.merge_suggestion as MergeSuggestion) ?? null);
+            }).catch(() => {});
+          }, 4000);
         }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
+
+    return () => { if (enrichPollTimer) clearTimeout(enrichPollTimer); };
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Set content once editor is ready and capture is loaded (race condition fallback)
   useEffect(() => {
     if (editor && capture && editor.state.doc.textContent.trim() === "") {
-      const content = capture.notes?.trim() ? capture.notes : `<h1>${capture.summary}</h1>`;
-      editor.commands.setContent(content, false);
+      editor.commands.setContent(buildEditorContent(capture.notes, capture.summary));
     }
   }, [editor, capture]);
+
+  const handlePlanToday = async () => {
+    if (!capture) return;
+    setActionStatus("saving");
+    const today = getLocalToday();
+    await scheduleCapture(id, today, null, null);
+    setCapture((prev) => prev ? { ...prev, deadline: today } : prev);
+    setActionStatus("idle");
+  };
+
+  const handleDefer = async () => {
+    if (!capture) return;
+    setActionStatus("saving");
+    await deferCaptureApi(id);
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const deferTo = tomorrow.toISOString().slice(0, 10);
+    setCapture((prev) => prev ? { ...prev, metadata: { ...prev.metadata, deferred_to: deferTo } } : prev);
+    setActionStatus("idle");
+  };
+
+  const handleArchive = async () => {
+    if (!capture) return;
+    setActionStatus("saving");
+    const cfg = TYPE_CONFIG[capture.capture_type as keyof typeof TYPE_CONFIG];
+    const archiveStatus = cfg?.doneStatus || "done";
+    await updateCaptureStatus(id, archiveStatus);
+    setCapture((prev) => prev ? { ...prev, status: archiveStatus } : prev);
+    setActionStatus("idle");
+  };
+
+  const handleReopen = async () => {
+    if (!capture) return;
+    setActionStatus("saving");
+    await updateCaptureStatus(id, "active");
+    setCapture((prev) => {
+      if (!prev) return prev;
+      const { deferred_to: _, ...restMeta } = prev.metadata as Record<string, unknown>;
+      return { ...prev, status: "active", metadata: restMeta };
+    });
+    setActionStatus("idle");
+  };
 
   const handleOrganize = async () => {
     if (!editor || editor.state.doc.textContent.trim() === "") return;
     setOrganizing(true);
     try {
-      const organized = await organizeNotes(id);
-      setOrganizePreview(organized);
+      const result = await organizeNotes(id);
+      setOrganizePreview(result.notes);
+      setOrganizeClusterSize(result.cluster_size);
+      if (result.merge_suggestion) {
+        setMergeSuggestion(result.merge_suggestion as typeof mergeSuggestion);
+      }
     } catch { /* keep existing */ }
     finally { setOrganizing(false); }
   };
 
   const applyOrganize = () => {
     if (!editor || !organizePreview) return;
-    editor.commands.setContent(organizePreview, false);
+    editor.commands.setContent(organizePreview);
     setOrganizePreview(null);
   };
 
@@ -223,25 +432,162 @@ export default function CaptureEditorPage() {
         <div className="flex items-center gap-3">
           {saveStatus === "saving" && <span className="text-[10px] text-stone-300">saving…</span>}
           {saveStatus === "saved" && <span className="text-[10px] text-stone-300">saved</span>}
-          <button onClick={handleOrganize} disabled={organizing || !editor || editor.isEmpty}
-            className="text-[11px] text-stone-400 hover:text-stone-600 disabled:opacity-30 transition-colors" title="AI Organize">
-            {organizing
-              ? <span className="w-3 h-3 border border-stone-400 border-t-transparent rounded-full animate-spin inline-block" />
-              : "✦"}
-          </button>
         </div>
       </div>
 
       {/* Date + meta */}
-      <div className="flex items-center justify-center gap-2 mb-6">
-        <p className="text-xs text-stone-400">{formatDate(capture.created_at)}</p>
-        {cfg && (
-          <span className={`text-[10px] px-1.5 py-px rounded font-medium ${cfg.bgClass}`}>{cfg.label}</span>
-        )}
-        {capture.deadline && (
-          <span className="text-[10px] text-stone-400">{capture.deadline}</span>
-        )}
+      <div className="flex flex-col items-center gap-1.5 mb-6">
+        <div className="flex items-center gap-2">
+          <p className="text-xs text-stone-400">{formatDate(capture.created_at)}</p>
+          {cfg && (
+            <span className={`text-[10px] px-1.5 py-px rounded font-medium ${cfg.bgClass}`}>{cfg.label}</span>
+          )}
+          {capture.deadline && (
+            <span className="text-[10px] text-stone-400">{capture.deadline}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {capture.metadata?.topic ? (
+            <Link
+              href={`/topics/${encodeURIComponent(capture.metadata.topic as string)}`}
+              className="text-xs text-stone-400 hover:text-stone-700 transition-colors"
+            >
+              {capture.metadata.topic as string} →
+            </Link>
+          ) : (
+            (capture.capture_type === "to_learn" || capture.capture_type === "to_know") && (
+              <span className="text-xs text-stone-300 italic">no topic yet</span>
+            )
+          )}
+          {(capture.capture_type === "to_learn" || capture.capture_type === "to_know") && (
+            <button
+              onClick={async () => {
+                await reEnrich(id);
+                // Poll after 4 s for the enrichment result
+                setTimeout(() => {
+                  getCapture(id).then((fresh) => {
+                    setCapture(fresh);
+                    setMergeSuggestion((fresh.metadata?.merge_suggestion as MergeSuggestion) ?? null);
+                    if (editor && fresh.notes?.trim()) {
+                      editor.commands.setContent(fresh.notes);
+                    }
+                  }).catch(() => {});
+                }, 4000);
+              }}
+              title="Re-fetch title and topic"
+              className="text-[10px] text-stone-300 hover:text-stone-500 transition-colors"
+            >
+              ↺
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Action bar — not shown for calendar or inbox types */}
+      {capture.capture_type !== "calendar" && capture.capture_type !== "inbox" && (
+        <div className="flex items-center gap-2 mb-6 flex-wrap">
+          {capture.status === "active" ? (
+            <>
+              {capture.deadline !== getLocalToday() && (
+                <ActionPill
+                  onClick={handlePlanToday}
+                  disabled={actionStatus === "saving"}
+                  label="Plan today"
+                  icon={
+                    <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                      <rect x="1.5" y="2.5" width="11" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+                      <path d="M4.5 1.5v2M9.5 1.5v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                      <path d="M1.5 6h11" stroke="currentColor" strokeWidth="1.3"/>
+                      <path d="M7 9v2.5M5.75 10.25h2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                    </svg>
+                  }
+                />
+              )}
+              <ActionPill
+                onClick={handleDefer}
+                disabled={actionStatus === "saving"}
+                label="Defer"
+                icon={
+                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                    <circle cx="7" cy="7.5" r="5" stroke="currentColor" strokeWidth="1.3"/>
+                    <path d="M7 5v2.5l1.5 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M4.5 2h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                  </svg>
+                }
+              />
+              <ActionPill
+                onClick={handleArchive}
+                disabled={actionStatus === "saving"}
+                label="Archive"
+                variant="ghost"
+                icon={
+                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                    <rect x="1.5" y="5" width="11" height="7.5" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+                    <path d="M1 3.5h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                    <rect x="1" y="1.5" width="12" height="2" rx="1" stroke="currentColor" strokeWidth="1.3"/>
+                    <path d="M5.5 9h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                  </svg>
+                }
+              />
+            </>
+          ) : (
+            <ActionPill
+              onClick={handleReopen}
+              disabled={actionStatus === "saving"}
+              label="↩ Reopen"
+            />
+          )}
+          {actionStatus === "saving" && (
+            <span className="text-[10px] text-stone-300 italic">Saving…</span>
+          )}
+        </div>
+      )}
+
+      {/* to_know / to_learn: AI answer + search chips */}
+      {(capture.capture_type === "to_know" || capture.capture_type === "to_learn") &&
+        (capture.metadata?.answer || (capture.metadata?.search_queries as string[] | undefined)?.length) && (
+        <div className="mb-5 rounded-xl border border-stone-100 bg-stone-50 px-4 py-3 space-y-3">
+          {capture.metadata?.answer && (
+            <div>
+              <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider mb-1">AI Answer</p>
+              <p className="text-sm text-stone-700 leading-snug whitespace-pre-wrap">
+                {capture.metadata.answer as string}
+              </p>
+            </div>
+          )}
+          {((capture.metadata?.search_queries as string[] | undefined) ?? []).length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider mb-2">Search</p>
+              <div className="flex flex-wrap gap-1.5">
+                {(capture.metadata.search_queries as string[]).map((q, i) => (
+                  <a
+                    key={i}
+                    href={`https://www.google.com/search?q=${encodeURIComponent(q)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white border border-stone-200 text-xs text-stone-600 hover:bg-stone-100 hover:border-stone-300 transition-colors"
+                  >
+                    {q}
+                    <svg width="9" height="9" viewBox="0 0 9 9" fill="none" className="text-stone-300 flex-shrink-0">
+                      <path d="M2 1h6v6M8 1L1 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                    </svg>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Merge suggestion */}
+      {mergeSuggestion && (
+        <MergeSuggestionBanner
+          captureId={id}
+          suggestion={mergeSuggestion}
+          onDismiss={() => setMergeSuggestion(null)}
+          onMerged={() => setMergeSuggestion(null)}
+        />
+      )}
 
       {/* Editor */}
       <div className="relative">
@@ -295,6 +641,12 @@ export default function CaptureEditorPage() {
             active={editor?.isActive("code")} title="Code">
             <CodeIcon />
           </ToolbarBtn>
+          <div className="w-px h-4 bg-stone-200 mx-0.5" />
+          <ToolbarBtn onClick={handleOrganize} disabled={organizing || !editor || editor.isEmpty} title="AI Organize">
+            {organizing
+              ? <span className="w-3 h-3 border border-stone-400 border-t-transparent rounded-full animate-spin inline-block" />
+              : <span className="text-[11px] leading-none">✦</span>}
+          </ToolbarBtn>
         </div>
       </div>
 
@@ -310,8 +662,20 @@ export default function CaptureEditorPage() {
               <div className="w-8 h-1 rounded-full bg-stone-200" />
             </div>
             <div className="px-5 pb-3 flex-shrink-0">
-              <p className="text-sm font-semibold text-stone-900">Preview</p>
-              <p className="text-xs text-stone-400 mt-0.5">AI reorganized your notes. Replace existing content?</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold text-stone-900">Preview</p>
+                {organizeClusterSize > 1 && (
+                  <span className="text-[10px] px-1.5 py-px rounded-full bg-amber-100 text-amber-700 font-medium">
+                    {organizeClusterSize} captures synthesized
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-stone-400 mt-0.5">
+                {organizeClusterSize > 1
+                  ? "AI synthesized related captures into one document."
+                  : "AI reorganized your notes."}
+                {" "}Replace existing content?
+              </p>
             </div>
             <div className="h-px bg-[#f0ede7] flex-shrink-0" />
             <div className="flex-1 overflow-y-auto px-5 py-4">
@@ -360,6 +724,35 @@ export default function CaptureEditorPage() {
         .ProseMirror blockquote { border-left: 3px solid #e7e5e4; padding-left: 16px; color: #78716c; }
       `}</style>
     </div>
+  );
+}
+
+function ActionPill({
+  icon,
+  label,
+  onClick,
+  disabled,
+  variant = "default",
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  variant?: "default" | "ghost";
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors disabled:opacity-40 active:scale-[0.97] ${
+        variant === "ghost"
+          ? "border-stone-200 text-stone-400 hover:text-stone-600 hover:bg-stone-50"
+          : "border-stone-200 text-stone-600 hover:bg-stone-50"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

@@ -54,4 +54,9 @@ class BucketSession:
             from app.agents.cook_agent import expand_idea
             asyncio.create_task(expand_idea(row_id, content, result.metadata))
 
+        # GraphRAG: extract entities for all stored captures except calendar
+        if result.capture_type not in ("calendar", "inbox", "query"):
+            from app.agents.entity_agent import extract_entities
+            asyncio.create_task(extract_entities(row_id, result.summary, content))
+
         return row_id

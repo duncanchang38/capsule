@@ -1,11 +1,16 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useCaptures } from "@/hooks/useCaptures";
 import { useReviewStreak } from "@/hooks/useReviewStreak";
+import { useSelection } from "@/hooks/useSelection";
+import { clearDeleted, updateCaptureStatus, deferCapture as deferCaptureApi, scheduleCapture } from "@/lib/api";
 import { TYPE_CONFIG } from "@/lib/typeConfig";
+import { CaptureListRow, TypeBadge } from "@/components/CaptureListRow";
+import { SelectionToolbar } from "@/components/SelectionToolbar";
 import type { Capture } from "@/lib/api";
+import type { CaptureRowHandlers } from "@/components/CaptureListRow";
 
 function getLocalToday(): string {
   const d = new Date();
@@ -17,161 +22,145 @@ function isDeferred(c: Capture): boolean {
   return !!dt && dt > getLocalToday();
 }
 
-function TypeBadge({ type }: { type: string }) {
-  const cfg = TYPE_CONFIG[type as keyof typeof TYPE_CONFIG];
-  if (!cfg) return null;
+function snippet(capture: Capture): React.ReactNode {
+  if (capture.notes) {
+    const text = capture.notes.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (text.length > 20) {
+      return (
+        <p className="text-[10px] text-stone-400 mt-0.5 line-clamp-1">
+          {text.slice(0, 120)}
+        </p>
+      );
+    }
+  }
+  const firstLine = capture.content.split("\n")[0].trim();
+  if (
+    firstLine.length > 15 &&
+    firstLine.toLowerCase() !== capture.summary.toLowerCase()
+  ) {
+    return (
+      <p className="text-[10px] text-stone-400 mt-0.5 line-clamp-1">
+        {firstLine.slice(0, 120)}
+      </p>
+    );
+  }
+  return undefined;
+}
+
+function CalendarTodayRow({ capture }: { capture: Capture }) {
+  const time = capture.metadata?.time as string | undefined;
+  const location = typeof capture.metadata?.location === "string" ? capture.metadata.location : undefined;
   return (
-    <span className={`text-[10px] px-1.5 py-px rounded font-medium flex-shrink-0 ${cfg.bgClass}`}>
-      {cfg.label}
-    </span>
+    <Link
+      href={`/captures/${capture.id}`}
+      className="flex items-start gap-3 py-2 hover:bg-stone-50 rounded-lg px-1 -mx-1 transition-colors"
+    >
+      <div className="w-12 flex-shrink-0 text-right pt-0.5">
+        <span className="text-[10px] text-stone-400 font-medium">{time ?? "—"}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-stone-800 leading-snug">{capture.summary}</p>
+        {location && (
+          <p className="text-[10px] text-stone-400 mt-0.5 line-clamp-1">{location}</p>
+        )}
+      </div>
+      <TypeBadge type={capture.capture_type} />
+    </Link>
   );
 }
 
-function FloatingItemRow({
-  capture,
-  onPlanToday,
-  onDefer,
-  onLetGo,
+type TabId = "overdue" | "schedule" | "later" | "captured" | "archive";
+
+const ARCHIVE_TTL_DAYS = 30;
+
+function deletedDaysLeft(c: Capture): number | null {
+  const deletedAt = c.metadata?.deleted_at as string | undefined;
+  if (!deletedAt) return null;
+  const expiresAt = new Date(deletedAt);
+  expiresAt.setDate(expiresAt.getDate() + ARCHIVE_TTL_DAYS);
+  return Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+}
+
+interface Tab {
+  id: TabId;
+  label: string;
+  count: number;
+  red?: boolean;
+}
+
+function TabBar({
+  tabs,
+  active,
+  streak,
+  selecting,
+  onChange,
+  onSelect,
 }: {
-  capture: Capture;
-  onPlanToday: (id: number) => Promise<void>;
-  onDefer: (id: number) => Promise<void>;
-  onLetGo: (id: number, status: string) => Promise<void>;
+  tabs: Tab[];
+  active: TabId;
+  streak: number;
+  selecting: boolean;
+  onChange: (id: TabId) => void;
+  onSelect: () => void;
 }) {
-  const [processing, setProcessing] = useState(false);
-  const [resolved, setResolved] = useState(false);
-  const TODAY = getLocalToday();
-  const isOverdue = capture.deadline && capture.deadline < TODAY;
-  const cfg = TYPE_CONFIG[capture.capture_type as keyof typeof TYPE_CONFIG];
-
-  const run = async (fn: () => Promise<void>) => {
-    setProcessing(true);
-    await fn();
-    setResolved(true);
-    setProcessing(false);
-  };
-
-  if (resolved) return null;
-
   return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-stone-50 last:border-0">
-      <div
-        className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5"
-        style={{ backgroundColor: cfg?.color ?? "#a8a29e" }}
-      />
-      <div className="flex-1 min-w-0">
-        <Link href={`/captures/${capture.id}`} className="text-sm text-stone-800 leading-snug hover:text-stone-600 transition-colors">
-          {capture.summary}
-        </Link>
-        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-          {isOverdue && <span className="text-[10px] text-red-400 font-medium">overdue</span>}
-          <TypeBadge type={capture.capture_type} />
+    <div className="sticky top-0 z-20 bg-[#f7f5f0] border-b border-stone-100 -mx-4 px-4 mb-0">
+      <div className="flex items-center gap-0 overflow-x-auto scrollbar-none">
+        {tabs.map((tab) => {
+          const isActive = tab.id === active;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => onChange(tab.id)}
+              className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                isActive
+                  ? tab.red
+                    ? "border-red-400 text-red-500"
+                    : "border-stone-800 text-stone-800"
+                  : "border-transparent text-stone-400 hover:text-stone-600"
+              }`}
+            >
+              {tab.label}
+              {tab.count > 0 && (
+                <span className={`text-[10px] font-normal ${isActive ? (tab.red ? "text-red-400" : "text-stone-500") : "text-stone-300"}`}>
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+        <div className="ml-auto flex items-center gap-2 flex-shrink-0 pl-2">
+          {streak > 0 && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-500 font-medium border border-amber-100">
+              {streak}d
+            </span>
+          )}
+          <button
+            onClick={onSelect}
+            className={`text-xs px-2.5 py-1 rounded-lg transition-colors ${
+              selecting ? "bg-stone-800 text-white" : "text-stone-400 hover:text-stone-700 hover:bg-stone-100"
+            }`}
+          >
+            Select
+          </button>
         </div>
-        {!processing && (
-          <div className="flex items-center gap-2 mt-1.5">
-            <button
-              onClick={() => run(() => onPlanToday(capture.id))}
-              className="text-[10px] px-2 py-0.5 rounded bg-stone-800 text-white font-medium hover:bg-stone-700 transition-colors"
-            >
-              Plan today
-            </button>
-            <button
-              onClick={() => run(() => onDefer(capture.id))}
-              className="text-[10px] text-stone-400 hover:text-stone-600 transition-colors"
-            >
-              Defer
-            </button>
-            {cfg?.doneStatus && (
-              <button
-                onClick={() => run(() => onLetGo(capture.id, cfg.doneStatus))}
-                className="text-[10px] text-stone-300 hover:text-stone-500 transition-colors"
-              >
-                Let go
-              </button>
-            )}
-          </div>
-        )}
-        {processing && <p className="text-[10px] text-stone-400 mt-1 italic">Saving…</p>}
       </div>
     </div>
   );
 }
 
-function TodayItemRow({ capture }: { capture: Capture }) {
-  const cfg = TYPE_CONFIG[capture.capture_type as keyof typeof TYPE_CONFIG];
-  const time = capture.metadata?.time as string | undefined;
-  const isCalendar = capture.capture_type === "calendar";
-
-  return (
-    <Link
-      href={`/captures/${capture.id}`}
-      className="flex items-start gap-3 py-2 hover:bg-stone-50 rounded-lg px-1 -mx-1 transition-colors"
-    >
-      {isCalendar ? (
-        <div className="w-12 flex-shrink-0 text-right">
-          <span className="text-[10px] text-stone-400 font-medium">{time ?? "—"}</span>
-        </div>
-      ) : (
-        <div
-          className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ml-1"
-          style={{ backgroundColor: cfg?.color ?? "#a8a29e" }}
-        />
-      )}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-stone-800 leading-snug">{capture.summary}</p>
-      </div>
-      {isCalendar ? (
-        <span className="text-[10px] px-1.5 py-px rounded bg-blue-50 text-blue-600 font-medium flex-shrink-0">Event</span>
-      ) : (
-        <span className="text-[10px] text-stone-300 flex-shrink-0">planned</span>
-      )}
-    </Link>
-  );
-}
-
-function CapturedRow({ capture }: { capture: Capture }) {
-  const cfg = TYPE_CONFIG[capture.capture_type as keyof typeof TYPE_CONFIG];
-  const time = capture.created_at?.slice(11, 16);
-
-  return (
-    <Link
-      href={`/captures/${capture.id}`}
-      className="flex items-start gap-3 py-2 hover:bg-stone-50 rounded-lg px-1 -mx-1 transition-colors"
-    >
-      <div
-        className="w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5"
-        style={{ backgroundColor: cfg?.color ?? "#a8a29e" }}
-      />
-      <p className="flex-1 text-sm text-stone-800 leading-snug min-w-0">{capture.summary}</p>
-      <div className="flex items-center gap-1.5 flex-shrink-0">
-        {cfg && <TypeBadge type={capture.capture_type} />}
-        {time && <span className="text-[10px] text-stone-300">{time}</span>}
-      </div>
-    </Link>
-  );
-}
-
-function SectionHeader({ label, count }: { label: string; count?: number }) {
-  return (
-    <h2 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-2">
-      {label}
-      {count !== undefined && (
-        <span className="normal-case font-normal ml-1 opacity-70">({count})</span>
-      )}
-    </h2>
-  );
-}
-
 export default function TodayPage() {
-  const { captures, loading, error, refresh, markDone, deferCapture, planToday } = useCaptures();
+  const { captures, setCaptures, loading, error, refresh, markDone, deleteCapture, deferCapture, planToday } = useCaptures();
   const { streak, reviewedToday, markReviewDone } = useReviewStreak();
-  const [mode, setMode] = useState<"morning" | "evening" | null>(null);
-  const [manualOverride, setManualOverride] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>("schedule");
+  const [clearConfirm, setClearConfirm] = useState<"idle" | "first" | "second">("idle");
+  const [clearing, setClearing] = useState(false);
+  const { selecting, selectedIds, toggle, selectAll, cancel: cancelSelection, startSelecting } = useSelection();
 
-  useEffect(() => {
-    const h = new Date().getHours();
-    setMode(h < 17 ? "morning" : "evening");
-  }, []);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => setMounted(true), []);
 
   const TODAY = getLocalToday();
 
@@ -183,52 +172,155 @@ export default function TodayPage() {
       return ta.localeCompare(tb);
     });
 
-  const plannedToday = captures.filter(
-    (c) =>
-      !["calendar", "inbox", "query"].includes(c.capture_type) &&
-      c.deadline === TODAY &&
-      c.status === "active"
-  );
+  // All non-calendar items due today (active + done), active first
+  const scheduledToday = captures
+    .filter(
+      (c) =>
+        !["calendar", "inbox", "query"].includes(c.capture_type) &&
+        c.deadline === TODAY &&
+        c.status !== "deleted"
+    )
+    .sort((a, b) => {
+      const aActive = a.status === "active" ? 0 : 1;
+      const bActive = b.status === "active" ? 0 : 1;
+      return aActive - bActive;
+    });
 
-  const carryIn = captures
+  const overdue = captures
     .filter(
       (c) =>
         !["calendar", "inbox", "query"].includes(c.capture_type) &&
         c.status === "active" &&
-        c.deadline !== TODAY &&
-        (c.deadline === null || c.deadline < TODAY) &&
+        c.deadline !== null &&
+        c.deadline !== undefined &&
+        c.deadline < TODAY &&
         !isDeferred(c)
     )
-    .sort((a, b) => {
-      const aOver = a.deadline && a.deadline < TODAY ? 0 : 1;
-      const bOver = b.deadline && b.deadline < TODAY ? 0 : 1;
-      return aOver - bOver;
-    })
-    .slice(0, 5);
+    .sort((a, b) => (a.deadline ?? "").localeCompare(b.deadline ?? ""));
+
+  const pending = captures.filter(
+    (c) =>
+      !["calendar", "inbox", "query"].includes(c.capture_type) &&
+      c.status === "active" &&
+      !c.deadline &&
+      !isDeferred(c)
+  );
+
+  const deferred = captures.filter(
+    (c) =>
+      !["calendar", "inbox", "query"].includes(c.capture_type) &&
+      c.status === "active" &&
+      isDeferred(c)
+  );
+
+  const alreadySurfacedIds = new Set([
+    ...calendarToday.map((c) => c.id),
+    ...scheduledToday.map((c) => c.id),
+    ...overdue.map((c) => c.id),
+    ...pending.map((c) => c.id),
+  ]);
 
   const capturedToday = captures
     .filter(
       (c) =>
         !["inbox", "query"].includes(c.capture_type) &&
-        c.created_at?.slice(0, 10) === TODAY
+        c.status === "active" &&
+        c.created_at?.slice(0, 10) === TODAY &&
+        !alreadySurfacedIds.has(c.id)
     )
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 
-  const doneToday = captures.filter(
-    (c) =>
-      !["calendar", "inbox", "query"].includes(c.capture_type) &&
-      c.status !== "active" &&
-      c.updated_at?.slice(0, 10) === TODAY
-  ).length;
+  const deleted = captures.filter(
+    (c) => !["inbox", "query", "calendar"].includes(c.capture_type) && c.status === "deleted"
+  );
 
-  const deferredToday = captures.filter(
-    (c) =>
-      (c.metadata?.deferred_to as string | undefined) &&
-      (c.metadata.deferred_to as string) > TODAY &&
-      c.updated_at?.slice(0, 10) === TODAY
-  ).length;
+  const scheduleCount = calendarToday.length + scheduledToday.length;
 
-  if (loading) {
+  const tabs: Tab[] = [
+    ...(overdue.length > 0
+      ? [{ id: "overdue" as const, label: "Overdue", count: overdue.length, red: true }]
+      : []),
+    { id: "schedule" as const, label: "Today", count: scheduleCount + pending.length },
+    { id: "later" as const, label: "Later", count: deferred.length },
+    ...(capturedToday.length > 0
+      ? [{ id: "captured" as const, label: "Captured", count: capturedToday.length }]
+      : []),
+    { id: "archive" as const, label: "Deleted", count: deleted.length },
+  ];
+
+  const visibleIds = tabs.map((t) => t.id);
+  const effectiveTab: TabId = visibleIds.includes(activeTab) ? activeTab : (visibleIds[0] ?? "schedule");
+
+  // Reset to schedule when data loads and active tab no longer valid
+  useEffect(() => {
+    if (!loading && !visibleIds.includes(activeTab)) {
+      setActiveTab(visibleIds[0] ?? "schedule");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
+
+  const handlers: CaptureRowHandlers = {
+    onPlanToday: planToday,
+    onDefer: deferCapture,
+    onDone: markDone,
+    onDelete: deleteCapture,
+  };
+
+  const scheduledHandlers: CaptureRowHandlers = {
+    onDefer: deferCapture,
+    onDelete: deleteCapture,
+    onCheckDone: markDone,
+    onRestoreActive: async (id) => {
+      setCaptures((prev) => prev.map((c) => c.id === id ? { ...c, status: "active" } : c));
+    },
+  };
+
+  const currentTabItems: Capture[] = (() => {
+    if (effectiveTab === "schedule") return [...calendarToday, ...scheduledToday, ...pending];
+    if (effectiveTab === "later") return deferred;
+    if (effectiveTab === "captured") return capturedToday;
+    if (effectiveTab === "archive") return deleted;
+    return [];
+  })();
+
+  const handleBulkDone = async () => {
+    const ids = [...selectedIds];
+    cancelSelection();
+    await Promise.all(ids.map((id) => {
+      const c = captures.find((x) => x.id === id);
+      const cfg2 = c ? TYPE_CONFIG[c.capture_type as keyof typeof TYPE_CONFIG] : undefined;
+      return updateCaptureStatus(id, cfg2?.doneStatus || "done");
+    }));
+    refresh();
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = [...selectedIds];
+    cancelSelection();
+    await Promise.all(ids.map((id) => updateCaptureStatus(id, "deleted")));
+    refresh();
+  };
+
+  const handleBulkPlanToday = async () => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const ids = [...selectedIds];
+    cancelSelection();
+    await Promise.all(ids.map((id) => scheduleCapture(id, todayStr, null, null)));
+    refresh();
+  };
+
+  const handleBulkDefer = async () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+    const ids = [...selectedIds];
+    cancelSelection();
+    await Promise.all(ids.map((id) => deferCaptureApi(id, tomorrowStr)));
+    refresh();
+  };
+
+  if (!mounted || loading) {
     return (
       <div className="p-4 max-w-2xl mx-auto flex flex-col gap-2">
         {[1, 2, 3].map((i) => (
@@ -248,143 +340,228 @@ export default function TodayPage() {
     );
   }
 
-  // Render skeleton while mode not yet hydrated
-  if (mode === null) {
-    return <div className="p-4 max-w-2xl mx-auto" />;
-  }
-
   return (
-    <div className="max-w-2xl mx-auto p-4 pt-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-2.5">
-          <h1 className="text-base font-semibold text-stone-900">Today</h1>
-          {streak > 0 && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium border border-amber-100">
-              {streak} day streak
-            </span>
-          )}
-        </div>
-        {/* Mode toggle */}
-        <div className="flex items-center gap-1 bg-stone-100 rounded-lg p-0.5">
-          {(["morning", "evening"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => { setMode(m); setManualOverride(true); }}
-              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors capitalize ${
-                mode === m ? "bg-white text-stone-900 shadow-sm" : "text-stone-400 hover:text-stone-600"
-              }`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-      </div>
+    <>
+    <div className="max-w-2xl mx-auto">
+      {/* Tab bar */}
+      <TabBar
+        tabs={tabs}
+        active={effectiveTab}
+        streak={streak}
+        selecting={selecting}
+        onChange={(id) => { setActiveTab(id); cancelSelection(); window.scrollTo({ top: 0 }); }}
+        onSelect={selecting ? cancelSelection : startSelecting}
+      />
 
-      {manualOverride && (
-        <p className="text-[10px] text-stone-300 mb-4 -mt-3">
-          Manual override — auto-switches at {mode === "morning" ? "5pm" : "midnight"}
-        </p>
-      )}
+      <div ref={scrollRef} className="px-4 pt-4 pb-8">
 
-      {mode === "morning" && (
-        <>
-          {/* Today section */}
-          <section className="mb-6">
-            <SectionHeader label="Today" />
-            {calendarToday.length === 0 && plannedToday.length === 0 ? (
-              <p className="text-sm text-stone-400 py-2">Nothing scheduled for today</p>
-            ) : (
-              <div>
-                {calendarToday.map((c) => <TodayItemRow key={c.id} capture={c} />)}
-                {plannedToday.map((c) => <TodayItemRow key={c.id} capture={c} />)}
-              </div>
-            )}
+        {/* OVERDUE */}
+        {effectiveTab === "overdue" && (
+          <section>
+            <div className="bg-white border border-red-100 rounded-xl px-4 py-1">
+              {overdue.map((c) => (
+                <CaptureListRow key={c.id} capture={c} handlers={handlers} meta={snippet(c)} />
+              ))}
+            </div>
           </section>
+        )}
 
-          {/* Carry in */}
-          <section className="mb-6">
-            <SectionHeader label="Carry in" count={carryIn.length} />
-            {carryIn.length === 0 ? (
-              <p className="text-sm text-stone-400 py-2">All clear — nothing floating</p>
-            ) : (
-              <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
-                {carryIn.map((c) => (
-                  <FloatingItemRow
-                    key={c.id}
-                    capture={c}
-                    onPlanToday={planToday}
-                    onDefer={deferCapture}
-                    onLetGo={markDone}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-        </>
-      )}
-
-      {mode === "evening" && (
-        <>
-          {/* Captured today */}
-          <section className="mb-6">
-            <SectionHeader label="Captured today" count={capturedToday.length} />
-            {capturedToday.length === 0 ? (
-              <p className="text-sm text-stone-400 py-2">Nothing captured yet today</p>
-            ) : (
-              <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
-                {capturedToday.map((c) => <CapturedRow key={c.id} capture={c} />)}
-              </div>
-            )}
-          </section>
-
-          {/* Still floating */}
-          <section className="mb-6">
-            <SectionHeader label="Still floating" count={carryIn.length} />
-            {carryIn.length === 0 ? (
-              <p className="text-sm text-stone-400 py-2">Nothing floating — great day</p>
-            ) : (
-              <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
-                {carryIn.map((c) => (
-                  <FloatingItemRow
-                    key={c.id}
-                    capture={c}
-                    onPlanToday={planToday}
-                    onDefer={deferCapture}
-                    onLetGo={markDone}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Stats + Done for today */}
-          <div className="mt-2 flex items-center justify-between">
-            <p className="text-[11px] text-stone-400">
-              <span className="font-semibold text-stone-600">{capturedToday.length}</span> captured
-              {doneToday > 0 && (
-                <> · <span className="font-semibold text-stone-600">{doneToday}</span> done</>
+        {/* TODAY — scheduled + pending + done */}
+        {effectiveTab === "schedule" && (
+          <section>
+            {/* Review button at top */}
+            <div className="mb-4">
+              {reviewedToday ? (
+                <p className="text-[11px] text-stone-300 text-center py-1">Daily review done</p>
+              ) : (
+                <button
+                  onClick={markReviewDone}
+                  className="w-full py-2.5 bg-stone-800 text-white text-sm font-medium rounded-xl hover:bg-stone-700 transition-colors active:scale-[0.98]"
+                >
+                  Mark daily review done
+                </button>
               )}
-              {deferredToday > 0 && (
-                <> · <span className="font-semibold text-stone-300">{deferredToday}</span> deferred</>
-              )}
+            </div>
+
+            {calendarToday.length === 0 && scheduledToday.length === 0 && pending.length === 0 ? (
+              <p className="text-sm text-stone-400 py-2">Nothing on for today</p>
+            ) : (
+              <>
+                {/* Scheduled today */}
+                {(calendarToday.length > 0 || scheduledToday.length > 0) && (
+                  <div className="mb-5">
+                    <p className="text-[11px] font-medium text-stone-400 uppercase tracking-wide mb-2">Scheduled today</p>
+                    <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
+                      {calendarToday.map((c) => <CalendarTodayRow key={c.id} capture={c} />)}
+                      {scheduledToday.map((c) => (
+                        <CaptureListRow key={c.id} capture={c} handlers={scheduledHandlers} meta={snippet(c)}
+                          selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Pending */}
+                {pending.length > 0 && (
+                  <div>
+                    <p className="text-[11px] font-medium text-stone-400 uppercase tracking-wide mb-2">Pending</p>
+                    <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
+                      {pending.map((c) => (
+                        <CaptureListRow key={c.id} capture={c} handlers={handlers} meta={snippet(c)}
+                          selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        )}
+
+        {/* LATER / DEFERRED */}
+        {effectiveTab === "later" && (
+          <section>
+            <p className="text-xs text-stone-400 mb-4 leading-relaxed">
+              Items you&apos;ve pushed to a future date. They&apos;ll surface back in Today when their date arrives.
             </p>
-          </div>
-
-          <div className="mt-4">
-            {reviewedToday ? (
-              <p className="text-[11px] text-stone-300 text-center">✓ reviewed today</p>
+            {deferred.length === 0 ? (
+              <p className="text-sm text-stone-400 py-2">Nothing deferred</p>
             ) : (
+              <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
+                {deferred.map((c) => (
+                  <CaptureListRow
+                    key={c.id} capture={c} handlers={handlers} dimmed
+                    selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle}
+                    meta={
+                      (c.metadata?.deferred_to as string | undefined)
+                        ? <p className="text-[10px] text-stone-400 mt-0.5">until {c.metadata?.deferred_to as string}</p>
+                        : snippet(c)
+                    }
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* CAPTURED TODAY */}
+        {effectiveTab === "captured" && (
+          <section>
+            <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
+              {capturedToday.map((c) => (
+                <CaptureListRow key={c.id} capture={c} handlers={handlers} meta={snippet(c)}
+                  selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* DELETED */}
+        {effectiveTab === "archive" && (
+          <section>
+            {deleted.length > 0 && (
               <button
-                onClick={markReviewDone}
-                className="w-full py-2.5 bg-stone-800 text-white text-sm font-medium rounded-xl hover:bg-stone-700 transition-colors active:scale-[0.98]"
+                onClick={() => setClearConfirm("first")}
+                className="w-full mb-4 flex items-center justify-center gap-2 py-2.5 rounded-xl border border-red-200 text-red-500 text-sm font-medium hover:bg-red-50 transition-colors active:scale-[0.98]"
               >
-                Done for today
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 3.5h10M5 3.5V2.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5v1M11 3.5l-.6 7a1 1 0 01-1 .9H4.6a1 1 0 01-1-.9L3 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Empty bin ({deleted.length} item{deleted.length !== 1 ? "s" : ""})
               </button>
             )}
+            {deleted.length === 0 ? (
+              <p className="text-sm text-stone-400 py-2">Deletion bin is empty</p>
+            ) : (
+              <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
+                {deleted.map((c) => {
+                  const daysLeft = deletedDaysLeft(c) ?? 30;
+                  const urgent = daysLeft <= 3;
+                  return (
+                    <CaptureListRow
+                      key={c.id} capture={c}
+                      selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle}
+                      rightExtras={
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {c.notes && <span className="text-[10px] text-stone-300" title="Has notes">✦</span>}
+                          <span
+                            className={`flex items-center gap-0.5 text-[10px] font-medium tabular-nums ${urgent ? "text-red-500" : "text-red-400"}`}
+                            title={`Permanently deleted in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`}
+                          >
+                            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0">
+                              <path d="M1.5 2.5h7M3.5 2.5V2a.5.5 0 01.5-.5h2a.5.5 0 01.5.5v.5M8 2.5l-.5 6a.5.5 0 01-.5.5H3a.5.5 0 01-.5-.5L2 2.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            {daysLeft}d
+                          </span>
+                        </div>
+                      }
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Clear archive confirmation modal */}
+        {clearConfirm !== "idle" && (
+          <div
+            className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4"
+            onClick={() => setClearConfirm("idle")}
+          >
+            <div
+              className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {clearConfirm === "first" ? (
+                <>
+                  <h3 className="text-base font-semibold text-stone-900 mb-2">Empty bin?</h3>
+                  <p className="text-sm text-stone-500 mb-5">
+                    All {deleted.length} item{deleted.length !== 1 ? "s" : ""} in the bin will be permanently deleted. This cannot be undone.
+                  </p>
+                  <div className="flex gap-3">
+                    <button onClick={() => setClearConfirm("idle")} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-sm text-stone-600 hover:bg-stone-50">Cancel</button>
+                    <button onClick={() => setClearConfirm("second")} className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-medium hover:bg-red-600">Delete all</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-base font-semibold text-stone-900 mb-2">Are you sure?</h3>
+                  <p className="text-sm text-stone-500 mb-5">There is no way to recover these items. They will be gone permanently.</p>
+                  <div className="flex gap-3">
+                    <button onClick={() => setClearConfirm("idle")} className="flex-1 py-2.5 rounded-xl border border-stone-200 text-sm text-stone-600 hover:bg-stone-50">Cancel</button>
+                    <button
+                      disabled={clearing}
+                      onClick={async () => {
+                        setClearing(true);
+                        try { await clearDeleted(); await refresh(); setClearConfirm("idle"); }
+                        finally { setClearing(false); }
+                      }}
+                      className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
+                    >
+                      {clearing ? "Deleting…" : "Yes, delete forever"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-        </>
-      )}
+        )}
+
+      </div>
     </div>
+    {selecting && (
+      <SelectionToolbar
+        count={selectedIds.size}
+        total={currentTabItems.length}
+        onSelectAll={() => selectAll(currentTabItems.map((c) => c.id))}
+        onCancel={cancelSelection}
+        onDone={effectiveTab !== "archive" ? handleBulkDone : undefined}
+        onDelete={effectiveTab !== "archive" ? handleBulkDelete : undefined}
+        onPlanToday={effectiveTab !== "archive" ? handleBulkPlanToday : undefined}
+        onDefer={effectiveTab !== "archive" ? handleBulkDefer : undefined}
+      />
+    )}
+    </>
   );
 }

@@ -1,64 +1,70 @@
-"""Tests for storage/db.py — uses a temp SQLite file per test."""
+"""Tests for storage/db.py — requires a running PostgreSQL instance.
+
+Set TEST_DATABASE_URL env var to point at a test database, e.g.:
+    TEST_DATABASE_URL=postgresql://localhost/capsule_test pytest tests/test_db.py
+
+Each test gets a clean slate via TRUNCATE RESTART IDENTITY CASCADE.
+"""
+import os
 import pytest
-import sqlite3
-from pathlib import Path
-from unittest.mock import patch
+import psycopg2
+import psycopg2.extras
 
 
-@pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    """Redirect DB_PATH to a temp file for each test."""
-    db_path = tmp_path / "test.db"
-    monkeypatch.setattr("app.storage.db.DB_PATH", db_path)
-    return db_path
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    os.environ.get("DATABASE_URL", "postgresql://localhost/capsule_test"),
+)
 
 
-def test_init_creates_schema_with_user_id(tmp_db):
+@pytest.fixture(autouse=True)
+def tmp_db(monkeypatch):
+    """Point db module at test DB and wipe tables before each test."""
+    monkeypatch.setattr("app.storage.db.DATABASE_URL", TEST_DATABASE_URL)
     from app.storage import db
     db.init()
-    conn = sqlite3.connect(tmp_db)
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(captures)").fetchall()}
+    yield
+    # Truncate so each test starts fresh
+    with db._get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "TRUNCATE captures, capture_entities RESTART IDENTITY CASCADE"
+            )
+    db._pool.closeall()
+    db._pool = None
+
+
+# ── Schema / init ────────────────────────────────────────────────────────────
+
+def test_init_creates_schema():
+    conn = psycopg2.connect(TEST_DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'captures'
+    """)
+    cols = {row[0] for row in cur.fetchall()}
     conn.close()
     assert "user_id" in cols
     assert "capture_type" in cols
     assert "deadline" in cols
+    assert "metadata" in cols
+    assert "search_vector" in cols
 
 
-def test_init_is_idempotent(tmp_db):
+def test_init_is_idempotent():
     from app.storage import db
-    db.init()
     db.init()  # second call should not raise
-    conn = sqlite3.connect(tmp_db)
-    count = conn.execute("SELECT count(*) FROM captures").fetchone()[0]
-    conn.close()
-    assert count == 0
+    with db._get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM captures")
+            assert cur.fetchone()[0] == 0
 
 
-def test_init_migrates_missing_user_id(tmp_db):
-    """Old schema without user_id should be recreated."""
-    conn = sqlite3.connect(tmp_db)
-    conn.execute("""
-        CREATE TABLE captures (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            capture_type TEXT NOT NULL,
-            content TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
+# ── CRUD round-trip ───────────────────────────────────────────────────────────
 
+def test_save_capture_round_trip():
     from app.storage import db
-    db.init()
-
-    conn = sqlite3.connect(tmp_db)
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(captures)").fetchall()}
-    conn.close()
-    assert "user_id" in cols
-
-
-def test_save_capture_round_trip(tmp_db):
-    from app.storage import db
-    db.init()
     row_id = db.save_capture(
         capture_type="to_hit",
         completion_type="archive",
@@ -68,7 +74,8 @@ def test_save_capture_round_trip(tmp_db):
         deadline="2026-04-04",
         user_id="default",
     )
-    assert row_id == 1
+    assert isinstance(row_id, int)
+    assert row_id >= 1
 
     rows = db.get_recent()
     assert len(rows) == 1
@@ -79,9 +86,8 @@ def test_save_capture_round_trip(tmp_db):
     assert rows[0]["metadata"] == {"priority": "normal"}
 
 
-def test_get_recent_filter_by_type(tmp_db):
+def test_get_recent_filter_by_type():
     from app.storage import db
-    db.init()
     db.save_capture("to_hit", "archive", "task", "Task summary", {})
     db.save_capture("to_learn", "absorb", "article", "Article summary", {})
     db.save_capture("to_hit", "archive", "task2", "Task 2", {})
@@ -94,36 +100,34 @@ def test_get_recent_filter_by_type(tmp_db):
     assert len(learns) == 1
 
 
-def test_get_recent_no_filter_returns_all(tmp_db):
+def test_get_recent_no_filter_returns_all():
     from app.storage import db
-    db.init()
     db.save_capture("to_hit", "archive", "t", "s", {})
     db.save_capture("to_learn", "absorb", "t", "s", {})
     rows = db.get_recent()
     assert len(rows) == 2
 
 
-def test_update_status(tmp_db):
+def test_update_status():
     from app.storage import db
-    db.init()
     row_id = db.save_capture("to_hit", "archive", "task", "Task", {})
     db.update_status(row_id, "archived")
     rows = db.get_recent()
     assert rows[0]["status"] == "archived"
 
 
-def test_update_metadata(tmp_db):
+def test_update_metadata():
     from app.storage import db
-    db.init()
     row_id = db.save_capture("to_learn", "absorb", "article", "Article", {"topic": None})
     db.update_metadata(row_id, {"topic": "machine learning", "resource_type": "article", "url": None})
     rows = db.get_recent()
     assert rows[0]["metadata"]["topic"] == "machine learning"
 
 
-def test_get_by_view_todos(tmp_db):
+# ── View queries ──────────────────────────────────────────────────────────────
+
+def test_get_by_view_todos():
     from app.storage import db
-    db.init()
     db.save_capture("to_hit", "archive", "task", "Task", {})
     db.save_capture("calendar", "archive", "event", "Event", {}, deadline="2026-04-04")
     db.save_capture("inbox", "inbox", "unclear", "Unclear", {})
@@ -137,14 +141,10 @@ def test_get_by_view_todos(tmp_db):
     assert "to_learn" in types
 
 
-def test_get_by_view_todos_urgency_order(tmp_db):
+def test_get_by_view_todos_urgency_order():
     from app.storage import db
-    db.init()
-    # overdue (past deadline)
     db.save_capture("to_hit", "archive", "c_overdue", "Overdue task", {}, deadline="2020-01-01")
-    # no deadline
     db.save_capture("to_hit", "archive", "c_none", "No deadline task", {})
-    # future deadline
     db.save_capture("to_hit", "archive", "c_future", "Future task", {}, deadline="2099-12-31")
 
     todos = db.get_by_view("todos")
@@ -153,23 +153,16 @@ def test_get_by_view_todos_urgency_order(tmp_db):
     assert summaries.index("Future task") < summaries.index("No deadline task")
 
 
-def test_get_by_view_calendar(tmp_db):
+def test_get_by_view_calendar():
     from app.storage import db
-    db.init()
-    # no deadline — excluded
     db.save_capture("to_hit", "archive", "task_no_deadline", "Task no deadline", {})
-    # to_hit with deadline — included
     db.save_capture("to_hit", "archive", "task_with_deadline", "Task with deadline", {}, deadline="2026-04-07")
-    # calendar events — included
     db.save_capture("calendar", "archive", "event1", "Event 1", {}, deadline="2026-04-10")
     db.save_capture("calendar", "archive", "event2", "Event 2", {}, deadline="2026-04-05")
-    # to_learn with deadline — now included (any type with deadline)
     db.save_capture("to_learn", "absorb", "book", "Finish the book", {}, deadline="2026-04-06")
-    # inbox with deadline — excluded
     db.save_capture("inbox", "inbox", "junk", "Inbox item", {}, deadline="2026-04-08")
 
     cal = db.get_by_view("calendar")
-    # 4 items with deadline, excluding inbox and no-deadline task
     assert len(cal) == 4
     deadlines = [r["deadline"] for r in cal]
     assert deadlines == ["2026-04-05", "2026-04-06", "2026-04-07", "2026-04-10"]

@@ -21,14 +21,20 @@ if _env_path.exists():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    deleted = db.delete_old_deleted()
+    if deleted:
+        import logging
+        logging.getLogger(__name__).info("Purged %d deleted capture(s) past TTL", deleted)
     yield
 
 
 app = FastAPI(lifespan=lifespan)
 
+_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

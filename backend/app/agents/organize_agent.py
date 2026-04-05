@@ -3,12 +3,9 @@ AI organize agent — restructures a capture's notes into clean HTML for Tiptap.
 Called on-demand when user taps ✦ in the capture editor.
 """
 import logging
-from anthropic import AsyncAnthropicBedrock
+from app.agents.client import anthropic_client as _client, HAIKU as _MODEL
 
 logger = logging.getLogger(__name__)
-
-_client = AsyncAnthropicBedrock()
-_MODEL = "anthropic.claude-3-haiku-20240307-v1:0"
 
 _HTML_RULES = (
     "Output ONLY valid HTML — no markdown, no code fences, no explanation. "
@@ -127,4 +124,73 @@ async def organize_capture(capture: dict) -> str:
         return result
     except Exception as e:
         logger.error("organize_capture failed: %s", e)
+        raise
+
+
+_CLUSTER_SYSTEM = f"""You are synthesizing multiple related captures into a single structured document.
+
+The user clicked "Organize" on one capture, and these captures are connected by shared topics or entities.
+Your job: synthesize them into one coherent, well-structured note — not a list of summaries, but a genuine synthesis.
+
+Structure:
+1. <h1> — A title that captures the shared theme (use the anchor capture's title if clear)
+2. <h2>Overview</h2> — 2–3 sentences on what these captures collectively represent
+3. Remaining sections — choose 2–4 sections that fit the content naturally (Key Ideas, Actions, Questions, Timeline, Resources, etc.)
+4. <h2>Open Threads</h2> — unresolved questions or next steps surfaced by the cluster. If none, omit.
+
+Rules:
+- Preserve the user's own words wherever possible
+- Do NOT summarize each capture separately — synthesize across them
+- Surface connections the user may not have noticed
+- Be honest about gaps or contradictions
+
+{_HTML_RULES}"""
+
+
+async def synthesize_cluster(captures: list[dict]) -> str:
+    """
+    Synthesize a cluster of related captures into one structured HTML document.
+    Called when ✦ Organize is triggered and the anchor capture has entity-connected peers.
+    """
+    import re
+
+    if not captures:
+        return ""
+
+    anchor = captures[0]
+    anchor_type = anchor.get("capture_type", "")
+    h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", anchor.get("notes") or "", re.IGNORECASE | re.DOTALL)
+    anchor_title = (
+        re.sub(r"<[^>]+>", "", h1_match.group(1)).strip()
+        if h1_match else anchor.get("summary", "")
+    )
+
+    parts = []
+    for i, cap in enumerate(captures):
+        label = "Anchor capture" if i == 0 else f"Related capture {i}"
+        notes = (cap.get("notes") or "").strip()
+        plain = re.sub(r"<[^>]+>", " ", notes)
+        plain = re.sub(r"\s{2,}", " ", plain).strip()
+        summary = cap.get("summary", "")
+        parts.append(f"[{label}]\nSummary: {summary}\n{plain[:800]}")
+
+    combined = "\n\n---\n\n".join(parts)
+
+    try:
+        response = await _client.messages.create(
+            model=_MODEL,
+            max_tokens=2048,
+            system=_CLUSTER_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": f"Anchor title: {anchor_title}\n\nCaptures:\n\n{combined}",
+            }],
+        )
+        result = response.content[0].text.strip()
+        if result.startswith("```"):
+            result = re.sub(r"^```[a-z]*\n?", "", result)
+            result = re.sub(r"\n?```$", "", result)
+        return result
+    except Exception as e:
+        logger.error("synthesize_cluster failed: %s", e)
         raise

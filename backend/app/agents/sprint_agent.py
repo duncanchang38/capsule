@@ -1,8 +1,5 @@
 import json
-from anthropic import AsyncAnthropicBedrock
-
-_client = AsyncAnthropicBedrock()
-_MODEL = "anthropic.claude-3-haiku-20240307-v1:0"
+from app.agents.client import anthropic_client as _client, HAIKU as _MODEL
 
 _SYSTEM = """You break tasks into focused, meaningful work sessions.
 Given a task summary and session count, return a JSON array of session names.

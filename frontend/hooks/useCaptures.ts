@@ -29,12 +29,31 @@ export function useCaptures() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Enrichment runs async on the backend (1-3s after capture).
+  // Re-fetch once after a short delay so enriched topics/summaries show up
+  // without requiring a manual refresh.
+  useEffect(() => {
+    const t = setTimeout(refresh, 3500);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const markDone = useCallback(async (id: number, status: string) => {
     await updateCaptureStatus(id, status);
     setCaptures((prev) =>
       prev.map((c) => (c.id === id ? { ...c, status } : c))
     );
   }, []);
+
+  const deleteCapture = useCallback(async (id: number) => {
+    const deletedAt = new Date().toISOString();
+    setCaptures((prev) =>
+      prev.map((c) => c.id === id
+        ? { ...c, status: "deleted", metadata: { ...c.metadata, deleted_at: deletedAt } }
+        : c)
+    );
+    await updateCaptureStatus(id, "deleted");
+  }, [setCaptures]);
 
   const deferCapture = useCallback(async (id: number, deferTo?: string) => {
     const tomorrow = new Date();
@@ -58,5 +77,5 @@ export function useCaptures() {
     await refresh();
   }, [refresh]);
 
-  return { captures, setCaptures, loading, error, refresh, markDone, deferCapture, planToday };
+  return { captures, setCaptures, loading, error, refresh, markDone, deleteCapture, deferCapture, planToday };
 }

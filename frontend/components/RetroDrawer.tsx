@@ -9,7 +9,7 @@ interface RetroDrawerProps {
   scheduledTomorrow: number;
   onDefer: (id: number) => Promise<void>;
   onPlanToday: (id: number) => Promise<void>;
-  onLetGo: (id: number, status: string) => Promise<void>;
+  onDone: (id: number, status: string) => Promise<void>;
   onComplete: () => void;
   onClose: () => void;
 }
@@ -20,12 +20,12 @@ function FloatingItem({
   capture,
   onDefer,
   onPlanToday,
-  onLetGo,
+  onDone,
 }: {
   capture: Capture;
   onDefer: (id: number) => Promise<void>;
   onPlanToday: (id: number) => Promise<void>;
-  onLetGo: (id: number, status: string) => Promise<void>;
+  onDone: (id: number, status: string) => Promise<void>;
 }) {
   const [state, setState] = useState<ItemState>("idle");
   const [action, setAction] = useState<string>("");
@@ -98,11 +98,11 @@ function FloatingItem({
             </button>
             {cfg?.doneStatus && (
               <button
-                onClick={() => run("archived", () => onLetGo(capture.id, cfg.doneStatus))}
+                onClick={() => run(cfg.doneLabel || "done", () => onDone(capture.id, cfg.doneStatus))}
                 className="text-xs px-2.5 py-1 rounded-lg text-stone-400 hover:text-stone-600 transition-colors active:scale-[0.95]"
-                title="Remove from your list"
+                title="Mark as done"
               >
-                Archive
+                {cfg.doneLabel || "Done"}
               </button>
             )}
           </>
@@ -117,7 +117,7 @@ export function RetroDrawer({
   scheduledTomorrow,
   onDefer,
   onPlanToday,
-  onLetGo,
+  onDone,
   onComplete,
   onClose,
 }: RetroDrawerProps) {
@@ -138,7 +138,7 @@ export function RetroDrawer({
   };
 
   const handleLetGo = async (id: number, status: string) => {
-    await onLetGo(id, status);
+    await onDone(id, status);
     setProcessed((p) => new Set([...p, id]));
   };
 
@@ -229,7 +229,7 @@ export function RetroDrawer({
                 capture={c}
                 onDefer={handleDefer}
                 onPlanToday={handlePlanToday}
-                onLetGo={handleLetGo}
+                onDone={handleLetGo}
               />
             ))}
           </div>

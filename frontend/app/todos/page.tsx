@@ -184,7 +184,7 @@ function CaptureCard({
                 <span className="text-stone-200">·</span>
                 <button
                   onClick={handleDefer}
-                  disabled={deferState !== "idle" || planState === "done"}
+                  disabled={deferState !== "idle"}
                   className="text-[10px] transition-colors disabled:opacity-50"
                   style={{ color: deferState === "done" ? "#16a34a" : deferState === "loading" ? "#a8a29e" : "#a8a29e" }}
                 >
@@ -435,7 +435,7 @@ export default function TodosPage() {
           scheduledTomorrow={scheduledTomorrow}
           onDefer={deferCapture}
           onPlanToday={planToday}
-          onLetGo={markDone}
+          onDone={markDone}
           onComplete={markReviewDone}
           onClose={() => setShowDrawer(false)}
         />
