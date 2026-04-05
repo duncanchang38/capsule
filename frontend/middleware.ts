@@ -13,7 +13,9 @@ export default auth(function middleware(
     pathname === "/login" ||
     pathname === "/reset-password" ||
     pathname.startsWith("/_next") ||
-    pathname === "/favicon.ico"
+    pathname === "/favicon.ico" ||
+    pathname === "/icon.png" ||
+    pathname === "/apple-icon.png"
   ) {
     return NextResponse.next();
   }
