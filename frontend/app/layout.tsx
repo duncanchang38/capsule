@@ -7,6 +7,10 @@ import { SessionProvider } from "next-auth/react";
 export const metadata: Metadata = {
   title: "Capsule",
   description: "Personal AI intake layer",
+  icons: {
+    icon: "/icon.png",
+    apple: "/apple-icon.png",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
