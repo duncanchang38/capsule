@@ -4,33 +4,56 @@ import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
+type Mode = "login" | "register" | "forgot";
+
 export default function LoginPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
+
+  function reset(nextMode: Mode) {
+    setMode(nextMode);
+    setError("");
+    setInfo("");
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    setInfo("");
     setLoading(true);
 
     try {
+      if (mode === "forgot") {
+        const res = await fetch("/api/auth/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        if (res.ok) {
+          setInfo("If that email is registered, a reset link is on its way.");
+        } else {
+          setError("Something went wrong. Please try again.");
+        }
+        return;
+      }
+
       if (mode === "register") {
         const res = await fetch("/api/auth/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password, name: name || undefined }),
+          body: JSON.stringify({ email, password, name }),
         });
         const data = await res.json();
         if (!res.ok) {
           setError(data.detail || "Registration failed");
           return;
         }
-        // Auto sign-in after register
       }
 
       const result = await signIn("credentials", {
@@ -61,42 +84,60 @@ export default function LoginPage() {
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6">
-          {/* Mode toggle */}
-          <div className="flex rounded-lg bg-stone-100 p-1 mb-6">
-            <button
-              type="button"
-              onClick={() => { setMode("login"); setError(""); }}
-              className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                mode === "login"
-                  ? "bg-white shadow-sm text-stone-800"
-                  : "text-stone-500 hover:text-stone-700"
-              }`}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode("register"); setError(""); }}
-              className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                mode === "register"
-                  ? "bg-white shadow-sm text-stone-800"
-                  : "text-stone-500 hover:text-stone-700"
-              }`}
-            >
-              Create account
-            </button>
-          </div>
+          {mode !== "forgot" && (
+            <div className="flex rounded-lg bg-stone-100 p-1 mb-6">
+              <button
+                type="button"
+                onClick={() => reset("login")}
+                className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  mode === "login"
+                    ? "bg-white shadow-sm text-stone-800"
+                    : "text-stone-500 hover:text-stone-700"
+                }`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => reset("register")}
+                className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  mode === "register"
+                    ? "bg-white shadow-sm text-stone-800"
+                    : "text-stone-500 hover:text-stone-700"
+                }`}
+              >
+                Create account
+              </button>
+            </div>
+          )}
+
+          {mode === "forgot" && (
+            <div className="mb-5">
+              <button
+                type="button"
+                onClick={() => reset("login")}
+                className="text-xs text-stone-400 hover:text-stone-600 flex items-center gap-1"
+              >
+                ← Back to sign in
+              </button>
+              <h2 className="text-base font-semibold text-stone-800 mt-2">Reset your password</h2>
+              <p className="text-xs text-stone-500 mt-1">
+                Enter your email and we&apos;ll send you a reset link.
+              </p>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === "register" && (
               <div>
                 <label className="block text-xs font-medium text-stone-600 mb-1">
-                  Name (optional)
+                  Name
                 </label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  required
                   placeholder="Your name"
                   className="w-full px-3 py-2 text-sm border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-300 bg-stone-50"
                 />
@@ -104,9 +145,7 @@ export default function LoginPage() {
             )}
 
             <div>
-              <label className="block text-xs font-medium text-stone-600 mb-1">
-                Email
-              </label>
+              <label className="block text-xs font-medium text-stone-600 mb-1">Email</label>
               <input
                 type="email"
                 value={email}
@@ -117,24 +156,40 @@ export default function LoginPage() {
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-stone-600 mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={8}
-                placeholder={mode === "register" ? "At least 8 characters" : ""}
-                className="w-full px-3 py-2 text-sm border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-300 bg-stone-50"
-              />
-            </div>
+            {mode !== "forgot" && (
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-medium text-stone-600">Password</label>
+                  {mode === "login" && (
+                    <button
+                      type="button"
+                      onClick={() => reset("forgot")}
+                      className="text-xs text-stone-400 hover:text-stone-600"
+                    >
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={8}
+                  placeholder={mode === "register" ? "At least 8 characters" : ""}
+                  className="w-full px-3 py-2 text-sm border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-stone-300 bg-stone-50"
+                />
+              </div>
+            )}
 
             {error && (
               <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
                 {error}
+              </p>
+            )}
+            {info && (
+              <p className="text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+                {info}
               </p>
             )}
 
@@ -147,7 +202,9 @@ export default function LoginPage() {
                 ? "..."
                 : mode === "login"
                 ? "Sign in"
-                : "Create account"}
+                : mode === "register"
+                ? "Create account"
+                : "Send reset link"}
             </button>
           </form>
         </div>

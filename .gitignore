@@ -11,3 +11,4 @@ settings.local.json
 backend/data/
 .gstack/
 backend/capsule.db
+.vercel

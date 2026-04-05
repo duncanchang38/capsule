@@ -3,6 +3,7 @@ uvicorn
 anthropic
 psycopg2-binary
 bcrypt
+resend
 pytest
 pytest-asyncio
 httpx

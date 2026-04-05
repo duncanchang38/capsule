@@ -113,6 +113,14 @@ def init() -> None:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_llm_usage_user ON llm_usage (user_id)"
             )
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                    token       TEXT PRIMARY KEY,
+                    user_id     TEXT NOT NULL,
+                    expires_at  TIMESTAMPTZ NOT NULL,
+                    created_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
 
 
 def save_capture(
@@ -502,6 +510,51 @@ def get_user_by_email(email: str) -> dict | None:
             cur.execute("SELECT * FROM users WHERE email = %s", (email,))
             row = cur.fetchone()
             return dict(row) if row else None
+
+
+def create_reset_token(user_id: str, expires_minutes: int = 60) -> str:
+    """Generate a password reset token valid for `expires_minutes`."""
+    import uuid
+    from datetime import datetime, timezone, timedelta
+    token = str(uuid.uuid4())
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            # One active token per user — delete any existing ones first
+            cur.execute("DELETE FROM password_reset_tokens WHERE user_id = %s", (user_id,))
+            cur.execute(
+                "INSERT INTO password_reset_tokens (token, user_id, expires_at) VALUES (%s, %s, %s)",
+                (token, user_id, expires_at),
+            )
+    return token
+
+
+def consume_reset_token(token: str) -> str | None:
+    """Validate and delete a reset token. Returns user_id on success, None if invalid/expired."""
+    from datetime import datetime, timezone
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT user_id, expires_at FROM password_reset_tokens WHERE token = %s",
+                (token,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row["expires_at"] < datetime.now(timezone.utc):
+                cur.execute("DELETE FROM password_reset_tokens WHERE token = %s", (token,))
+                return None
+            cur.execute("DELETE FROM password_reset_tokens WHERE token = %s", (token,))
+            return row["user_id"]
+
+
+def update_password(user_id: str, password_hash: str) -> None:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET password_hash = %s WHERE id = %s",
+                (password_hash, user_id),
+            )
 
 
 def log_llm_usage(

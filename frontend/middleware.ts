@@ -11,6 +11,7 @@ export default auth(function middleware(
   if (
     pathname.startsWith("/api/auth") ||
     pathname === "/login" ||
+    pathname === "/reset-password" ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico"
   ) {
