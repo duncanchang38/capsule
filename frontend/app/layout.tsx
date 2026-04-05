@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   title: "Capsule",
   description: "Personal AI intake layer",
   icons: {
-    icon: "/icon.png",
+    icon: "/favicon.svg",
     apple: "/apple-icon.png",
   },
 };
