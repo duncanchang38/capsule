@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSession, signOut } from "next-auth/react";
 
 const links = [
   { href: "/today", label: "Today" },
@@ -26,9 +27,10 @@ function CapsulePill({ inverted }: { inverted?: boolean }) {
 export function Nav() {
   const pathname = usePathname();
   const isHome = pathname === "/";
+  const { data: session } = useSession();
 
   return (
-    <nav className="flex gap-1 px-4 py-2.5 border-b border-[#e8e4db] bg-white overflow-x-auto">
+    <nav className="flex items-center gap-1 px-4 py-2.5 border-b border-[#e8e4db] bg-white overflow-x-auto">
       <Link
         href="/"
         aria-current={isHome ? "page" : undefined}
@@ -65,6 +67,20 @@ export function Nav() {
           </Link>
         );
       })}
+
+      {session?.user && (
+        <div className="ml-auto flex items-center gap-2 flex-shrink-0 pl-2">
+          <span className="text-xs text-stone-400 hidden sm:block">
+            {session.user.name || session.user.email}
+          </span>
+          <button
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="px-2.5 py-1 text-xs text-stone-500 hover:text-stone-800 hover:bg-stone-100 rounded-lg transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
+      )}
     </nav>
   );
 }

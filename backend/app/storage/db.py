@@ -86,6 +86,33 @@ def init() -> None:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ce_entity ON capture_entities(entity)"
             )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_captures_user ON captures (user_id)"
+            )
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+                    email         TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    name          TEXT,
+                    created_at    TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS llm_usage (
+                    id            SERIAL PRIMARY KEY,
+                    user_id       TEXT NOT NULL DEFAULT 'default',
+                    agent         TEXT NOT NULL,
+                    model         TEXT,
+                    input_tokens  INTEGER,
+                    output_tokens INTEGER,
+                    cost_usd      NUMERIC(10, 6),
+                    created_at    TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_llm_usage_user ON llm_usage (user_id)"
+            )
 
 
 def save_capture(
@@ -122,10 +149,16 @@ def update_status(capture_id: int, status: str) -> None:
             )
 
 
-def get_capture(capture_id: int) -> dict | None:
+def get_capture(capture_id: int, user_id: str | None = None) -> dict | None:
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM captures WHERE id = %s", (capture_id,))
+            if user_id is not None:
+                cur.execute(
+                    "SELECT * FROM captures WHERE id = %s AND user_id = %s",
+                    (capture_id, user_id),
+                )
+            else:
+                cur.execute("SELECT * FROM captures WHERE id = %s", (capture_id,))
             row = cur.fetchone()
             return _row_to_dict(row) if row else None
 
@@ -214,23 +247,27 @@ def rename_topic(old_topic: str, new_topic: str) -> int:
             return updated
 
 
-def get_recent(capture_type: str | None = None, limit: int = 20) -> list[dict]:
+def get_recent(
+    capture_type: str | None = None,
+    limit: int = 20,
+    user_id: str = "default",
+) -> list[dict]:
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if capture_type is not None:
                 cur.execute(
-                    "SELECT * FROM captures WHERE capture_type = %s ORDER BY created_at DESC LIMIT %s",
-                    (capture_type, limit),
+                    "SELECT * FROM captures WHERE capture_type = %s AND user_id = %s ORDER BY created_at DESC LIMIT %s",
+                    (capture_type, user_id, limit),
                 )
             else:
                 cur.execute(
-                    "SELECT * FROM captures ORDER BY created_at DESC LIMIT %s",
-                    (limit,),
+                    "SELECT * FROM captures WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+                    (user_id, limit),
                 )
             return [_row_to_dict(r) for r in cur.fetchall()]
 
 
-def get_by_view(view: str) -> list[dict]:
+def get_by_view(view: str, user_id: str = "default") -> list[dict]:
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if view == "todos":
@@ -238,6 +275,7 @@ def get_by_view(view: str) -> list[dict]:
                     SELECT * FROM captures
                     WHERE capture_type NOT IN ('calendar', 'inbox', 'query')
                       AND status = 'active'
+                      AND user_id = %s
                       AND (metadata->>'sprint_index') IS NULL
                     ORDER BY
                       CASE
@@ -248,17 +286,21 @@ def get_by_view(view: str) -> list[dict]:
                       END,
                       deadline ASC,
                       created_at DESC
-                """)
+                """, (user_id,))
             elif view == "calendar":
                 cur.execute("""
                     SELECT * FROM captures
                     WHERE deadline IS NOT NULL
                       AND status = 'active'
+                      AND user_id = %s
                       AND capture_type NOT IN ('inbox', 'query')
                     ORDER BY deadline ASC
-                """)
+                """, (user_id,))
             else:
-                cur.execute("SELECT * FROM captures ORDER BY created_at DESC LIMIT 100")
+                cur.execute(
+                    "SELECT * FROM captures WHERE user_id = %s ORDER BY created_at DESC LIMIT 100",
+                    (user_id,),
+                )
             return [_row_to_dict(r) for r in cur.fetchall()]
 
 
@@ -277,7 +319,7 @@ def delete_capture(capture_id: int) -> None:
             cur.execute("DELETE FROM captures WHERE id = %s", (capture_id,))
 
 
-def get_topics(limit: int = 30) -> list[dict]:
+def get_topics(limit: int = 30, user_id: str = "default") -> list[dict]:
     """Return distinct topics with capture counts, ordered by count desc."""
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -289,16 +331,22 @@ def get_topics(limit: int = 30) -> list[dict]:
                   AND metadata->>'topic' IS NOT NULL
                   AND metadata->>'topic' != ''
                   AND status != 'deleted'
+                  AND user_id = %s
                 GROUP BY topic
                 ORDER BY count DESC
                 LIMIT %s
                 """,
-                (limit,),
+                (user_id, limit),
             )
             return [{"topic": r["topic"], "count": r["count"]} for r in cur.fetchall()]
 
 
-def get_by_topic(topic: str, limit: int = 50, offset: int = 0) -> list[dict]:
+def get_by_topic(
+    topic: str,
+    limit: int = 50,
+    offset: int = 0,
+    user_id: str = "default",
+) -> list[dict]:
     """Return captures matching a topic name (case-insensitive)."""
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -308,10 +356,11 @@ def get_by_topic(topic: str, limit: int = 50, offset: int = 0) -> list[dict]:
                 WHERE LOWER(metadata->>'topic') = LOWER(%s)
                   AND capture_type IN ('to_learn', 'to_cook', 'to_know')
                   AND status != 'deleted'
+                  AND user_id = %s
                 ORDER BY created_at DESC
                 LIMIT %s OFFSET %s
                 """,
-                (topic, limit, offset),
+                (topic, user_id, limit, offset),
             )
             return [_row_to_dict(r) for r in cur.fetchall()]
 
@@ -431,7 +480,82 @@ def get_entity_cluster(
     return [anchor] + related
 
 
-def search_similar(query: str, exclude_id: int | None = None, limit: int = 10) -> list[dict]:
+def create_user(email: str, password_hash: str, name: str | None = None) -> str:
+    """Insert a new user row. Returns the generated id."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (email, password_hash, name)
+                VALUES (%s, %s, %s)
+                RETURNING id
+                """,
+                (email, password_hash, name),
+            )
+            return cur.fetchone()[0]
+
+
+def get_user_by_email(email: str) -> dict | None:
+    """Fetch a user row by email."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM users WHERE email = %s", (email,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def log_llm_usage(
+    user_id: str,
+    agent: str,
+    model: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cost_usd: float | None = None,
+) -> None:
+    """Log a single LLM API call for usage tracking."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO llm_usage (user_id, agent, model, input_tokens, output_tokens, cost_usd)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (user_id, agent, model, input_tokens, output_tokens, cost_usd),
+            )
+
+
+def get_llm_usage(user_id: str, days: int = 30) -> dict:
+    """Return aggregated LLM usage stats for a user over the past N days."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    SUM(input_tokens) AS total_input,
+                    SUM(output_tokens) AS total_output,
+                    SUM(cost_usd) AS total_cost,
+                    COUNT(*) AS total_calls
+                FROM llm_usage
+                WHERE user_id = %s
+                  AND created_at >= NOW() - INTERVAL '%s days'
+                """,
+                (user_id, days),
+            )
+            row = cur.fetchone()
+            return {
+                "total_input_tokens": row["total_input"] or 0,
+                "total_output_tokens": row["total_output"] or 0,
+                "total_cost_usd": float(row["total_cost"] or 0),
+                "total_calls": row["total_calls"] or 0,
+            }
+
+
+def search_similar(
+    query: str,
+    exclude_id: int | None = None,
+    limit: int = 10,
+    user_id: str = "default",
+) -> list[dict]:
     """
     Full-text search via tsvector/GIN index. Returns captures ranked by ts_rank.
     Falls back to empty list if query is empty or search fails.
@@ -450,10 +574,11 @@ def search_similar(query: str, exclude_id: int | None = None, limit: int = 10) -
                     WHERE search_vector @@ plainto_tsquery('english', %s)
                       AND capture_type NOT IN ('inbox', 'query', 'calendar')
                       AND status = 'active'
+                      AND user_id = %s
                     ORDER BY ts_rank(search_vector, plainto_tsquery('english', %s)) DESC
                     LIMIT %s
                     """,
-                    (query, query, limit + (1 if exclude_id else 0)),
+                    (query, user_id, query, limit + (1 if exclude_id else 0)),
                 )
                 rows = cur.fetchall()
             except Exception:

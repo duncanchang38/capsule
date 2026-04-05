@@ -2,7 +2,7 @@ import json
 import logging
 from datetime import date, timedelta, datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from app.storage import db
 from app.agents.client import anthropic_client as _anthropic, HAIKU
 
@@ -60,7 +60,7 @@ async def _dedup_topics(topics: list[dict]) -> list[dict]:
 
 
 @router.post("/captures/save")
-async def save_capture_direct(body: dict):
+async def save_capture_direct(body: dict, x_user_id: str = Header(default="default")):
     """Classify and save a capture directly, bypassing the chat state machine."""
     content = (body.get("content") or "").strip()
     notes = body.get("notes")  # optional HTML from rich text editor
@@ -77,7 +77,7 @@ async def save_capture_direct(body: dict):
         return {"ok": True, "capture_type": "query", "summary": result.summary, "id": None}
 
     bucket = BucketSession()
-    row_id = await bucket.store(content, result)
+    row_id = await bucket.store(content, result, user_id=x_user_id)
 
     if row_id and notes:
         db.update_notes(row_id, notes)
@@ -92,9 +92,9 @@ async def save_capture_direct(body: dict):
 
 
 @router.get("/captures/topics")
-async def get_topics():
+async def get_topics(x_user_id: str = Header(default="default")):
     """Return deduplicated topic list with counts."""
-    raw = db.get_topics(limit=30)
+    raw = db.get_topics(limit=30, user_id=x_user_id)
     deduped = await _dedup_topics(raw)
     return deduped
 
@@ -111,8 +111,8 @@ def rename_topic(body: dict):
 
 
 @router.get("/captures/{capture_id}")
-def get_capture_by_id(capture_id: int):
-    capture = db.get_capture(capture_id)
+def get_capture_by_id(capture_id: int, x_user_id: str = Header(default="default")):
+    capture = db.get_capture(capture_id, user_id=x_user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     return capture
@@ -123,21 +123,27 @@ def get_captures(
     view: Optional[str] = Query(default=None),
     capture_type: Optional[str] = Query(default=None),
     topic: Optional[str] = Query(default=None),
+    x_user_id: str = Header(default="default"),
 ):
     if topic is not None:
-        return db.get_by_topic(topic)
+        return db.get_by_topic(topic, user_id=x_user_id)
     if view is not None:
-        return db.get_by_view(view)
+        return db.get_by_view(view, user_id=x_user_id)
     if capture_type is not None:
-        return db.get_recent(capture_type=capture_type, limit=100)
-    return db.get_recent(limit=100)
+        return db.get_recent(capture_type=capture_type, limit=100, user_id=x_user_id)
+    return db.get_recent(limit=100, user_id=x_user_id)
 
 
 @router.patch("/captures/{capture_id}/status")
-def update_status(capture_id: int, body: dict):
+def update_status(capture_id: int, body: dict, x_user_id: str = Header(default="default")):
     status = body.get("status")
     if not status:
         return {"error": "status required"}
+
+    capture = db.get_capture(capture_id, user_id=x_user_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+
     db.update_status(capture_id, status)
 
     # Stamp deleted_at when moving to deletion bin; clear it on restore.
@@ -157,13 +163,13 @@ def update_status(capture_id: int, body: dict):
 
 
 @router.patch("/captures/{capture_id}/stage")
-def update_stage(capture_id: int, body: dict):
+def update_stage(capture_id: int, body: dict, x_user_id: str = Header(default="default")):
     stage = body.get("stage")
     if not stage:
         return {"error": "stage required"}
     if stage not in VALID_STAGES:
         return {"error": f"stage must be one of {sorted(VALID_STAGES)}"}
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=x_user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     db.merge_metadata(capture_id, {"stage": stage})
@@ -171,7 +177,7 @@ def update_stage(capture_id: int, body: dict):
 
 
 @router.patch("/captures/{capture_id}/schedule")
-def schedule_capture(capture_id: int, body: dict):
+def schedule_capture(capture_id: int, body: dict, x_user_id: str = Header(default="default")):
     """Update a capture's calendar slot: deadline, time, and/or duration."""
     deadline = body.get("deadline")
     time = body.get("time")
@@ -180,7 +186,7 @@ def schedule_capture(capture_id: int, body: dict):
     if deadline is None and time is None and duration_mins is None:
         return {"error": "at least one of deadline, time, or duration_mins required"}
 
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=x_user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
 
@@ -285,10 +291,10 @@ def defer_capture(capture_id: int, body: dict):
 
 
 @router.patch("/captures/{capture_id}/notes")
-def update_notes(capture_id: int, body: dict):
+def update_notes(capture_id: int, body: dict, x_user_id: str = Header(default="default")):
     """Save the free-form notes for a capture."""
     notes = body.get("notes", "")
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=x_user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     db.update_notes(capture_id, notes)

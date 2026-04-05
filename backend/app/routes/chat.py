@@ -1,6 +1,6 @@
 import json
 import time
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.session.state_machine import SessionState, advance
@@ -44,7 +44,7 @@ def _extract_topic(result) -> str | None:
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, x_user_id: str = Header(default="default")):
     if len(req.message) > 10000:
         async def too_long():
             yield _sse("message", {"text": "That's too long — keep it under 10,000 characters."})
@@ -68,7 +68,7 @@ async def chat(req: ChatRequest):
             if isinstance(capture_to_store, BulkClassificationResult):
                 count = 0
                 for item in capture_to_store.items:
-                    await bucket.store(item.summary, item)
+                    await bucket.store(item.summary, item, user_id=x_user_id)
                     count += 1
                 yield _sse("saved", {"type": "bulk", "count": count})
 
@@ -78,7 +78,7 @@ async def chat(req: ChatRequest):
 
             else:
                 content = new_state.original_text or req.message
-                row_id = await bucket.store(content, capture_to_store)
+                row_id = await bucket.store(content, capture_to_store, user_id=x_user_id)
                 if row_id is not None:
                     yield _sse("saved", {
                         "type": "capture",

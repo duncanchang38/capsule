@@ -17,7 +17,12 @@ COMPLETION_MAP = {
 
 
 class BucketSession:
-    async def store(self, content: str, result: ClassificationResult) -> int | None:
+    async def store(
+        self,
+        content: str,
+        result: ClassificationResult,
+        user_id: str = "default",
+    ) -> int | None:
         """Store a capture and fire async enrichment tasks. Returns row_id or None."""
         completion_type = COMPLETION_MAP.get(result.capture_type)
 
@@ -37,6 +42,7 @@ class BucketSession:
             metadata=result.metadata,
             deadline=result.deadline,
             notes=initial_notes,
+            user_id=user_id,
         )
 
         if result.capture_type == "to_learn":
