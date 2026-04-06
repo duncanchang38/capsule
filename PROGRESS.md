@@ -131,6 +131,40 @@ capsule/
 
 **Next:** User test with 2 friends for 1 week. Instrument manual toggle rate + evening review completion. Decide on Approach B (full redesign) based on data.
 
+### 2026-04-06 (Session 13)
+**Completed:**
+- **Instagram-style handle system** — stable internal UUID + mutable `@handle` lookup key. `user_handle_history` table enforces 14-day lock on released handles (impersonation prevention). 14-day change cooldown. `PATCH /auth/handle`, `GET /auth/check` endpoints. Lazy purge of expired locks inside `claim_handle()`.
+- **Registration form overhaul** — `noValidate` removes browser native popups. Inline `FieldState` errors with red/green border feedback. 500ms debounced uniqueness checks for email + handle (promise refs so submit can `await` them). Password validation: ≥8 chars + letter + number. Handle input auto-strips invalid chars. Fixed `@{handle}` template literal bug.
+- **Nav hidden on auth pages** — `AUTH_PATHS = new Set(["/login", "/reset-password"])`, Nav returns null on those routes.
+- **Recently viewed sidebar** — `useRecentViews` hook (localStorage, max 10, user-scoped by session). `RecentViewsSidebar` hover panel pinned to right edge. Mobile: tap backdrop to close. Shows type dot, topic, 60-char summary, relative time.
+- **Activity streak + status bar** — replaced `useReviewStreak` (buggy localStorage, not user-scoped) with backend-driven `GET /captures/stats?today=YYYY-MM-DD`. Returns `{streak, captured_today, completed_today, deferred_today}`. Streak computed from actual `captures.created_at` per user, consecutive days ending today or yesterday. `useActivityStats` hook fetches on mount. TabBar shows streak pill + status bar row (`3 captured · 2 done · 1 deferred`). Removed "Mark daily review done" button.
+- **Backend DB retry** — 10-attempt exponential backoff in `db.init()` for Railway Postgres startup timing.
+- **Vercel BACKEND_URL fix** — trailing `\n` from `echo` caused all proxy calls to fail. Fixed via `printf` + redeployed.
+
+**Files changed (key):**
+- `backend/app/storage/db.py` — handle system, `get_activity_stats()`, `_compute_streak()`
+- `backend/app/routes/auth.py` — register/handle/check endpoints
+- `backend/app/routes/captures.py` — `GET /captures/stats`
+- `frontend/app/login/page.tsx` — full form rewrite
+- `frontend/components/Nav.tsx` — hide on auth pages
+- `frontend/hooks/useActivityStats.ts` — new
+- `frontend/hooks/useReviewStreak.ts` — deprecated (still exists, replaced in today page)
+- `frontend/hooks/useRecentViews.ts` — new
+- `frontend/components/RecentViewsSidebar.tsx` — new
+- `frontend/app/today/page.tsx` — activity stats, no review button
+- `frontend/lib/api.ts` — `ActivityStats`, `getActivityStats()`
+
+**Gotchas:**
+- Promise refs (`emailCheckPromise`, `handleCheckPromise`) resolve to `boolean` (available), not state — avoids stale closure after `await Promise.all([...])` in submit handler.
+- `GET /captures/stats` must be declared before `GET /captures/{capture_id}` in FastAPI or "stats" matches as a capture ID.
+- `_compute_streak` — streak is alive if last activity was today OR yesterday; breaks if 2+ days ago.
+
+**Pending:**
+- Login page tagline "your personal AI intake layer" flagged as weak/cold — replacement TBD
+- `RESEND_API_KEY` and `APP_URL` needed on Railway for forgot-password emails to actually send
+
+**Next:** UI polish pass, email flow testing, invite friends for testing
+
 ### 2026-04-05 (Session 12)
 **Completed:**
 - **Classifier hallucination fix** — bare URL pre-processing guard in `classifier.py`: bare URLs bypass AI entirely, always return `to_learn` with raw URL as summary. Added CRITICAL rule to SYSTEM_PROMPT: "A URL is ALWAYS to_learn, never to_know." Eliminated "What is the capital of Bhutan?" hallucination on Instagram links.

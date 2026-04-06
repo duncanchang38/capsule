@@ -195,6 +195,19 @@ export async function deleteCapture(id: number): Promise<void> {
   await updateCaptureStatus(id, "deleted");
 }
 
+export interface ActivityStats {
+  streak: number;
+  captured_today: number;
+  completed_today: number;
+  deferred_today: number;
+}
+
+export async function getActivityStats(today: string): Promise<ActivityStats> {
+  const res = await fetch(`/api/captures/stats?today=${today}`);
+  if (!res.ok) throw new Error("Failed to fetch activity stats");
+  return res.json();
+}
+
 export interface Topic {
   topic: string;
   count: number;

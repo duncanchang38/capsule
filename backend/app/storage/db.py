@@ -38,7 +38,19 @@ def init() -> None:
     global _pool
     if _pool is not None:
         _pool.closeall()
-    _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, dsn=DATABASE_URL)
+
+    import time
+    max_attempts = 10
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, dsn=DATABASE_URL)
+            break
+        except psycopg2.OperationalError as e:
+            if attempt == max_attempts:
+                raise
+            wait = min(2 ** attempt, 30)
+            logger.warning("DB not ready (attempt %d/%d): %s — retrying in %ds", attempt, max_attempts, e, wait)
+            time.sleep(wait)
 
     with _get_conn() as conn:
         with conn.cursor() as cur:
@@ -91,13 +103,45 @@ def init() -> None:
             )
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
-                    id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-                    email         TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    name          TEXT,
-                    created_at    TIMESTAMPTZ DEFAULT NOW()
+                    id                TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+                    email             TEXT UNIQUE NOT NULL,
+                    password_hash     TEXT NOT NULL,
+                    name              TEXT,
+                    handle            TEXT UNIQUE,
+                    handle_changed_at TIMESTAMPTZ,
+                    created_at        TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            # Add handle columns to existing deployments that pre-date this migration
+            cur.execute("""
+                ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS handle            TEXT UNIQUE,
+                    ADD COLUMN IF NOT EXISTS handle_changed_at TIMESTAMPTZ
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_users_handle_ci
+                ON users (LOWER(handle))
+                WHERE handle IS NOT NULL
+            """)
+            # Tracks all previously held handles so recently-freed ones can be locked
+            # for 14 days — prevents impersonation after a rename (Instagram model).
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_handle_history (
+                    id          SERIAL PRIMARY KEY,
+                    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    handle      TEXT NOT NULL,
+                    claimed_at  TIMESTAMPTZ NOT NULL,
+                    released_at TIMESTAMPTZ NOT NULL
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_handle_history_handle"
+                " ON user_handle_history (handle)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_handle_history_user"
+                " ON user_handle_history (user_id)"
+            )
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS llm_usage (
                     id            SERIAL PRIMARY KEY,
@@ -488,19 +532,246 @@ def get_entity_cluster(
     return [anchor] + related
 
 
-def create_user(email: str, password_hash: str, name: str | None = None) -> str:
-    """Insert a new user row. Returns the generated id."""
+def create_user(
+    email: str,
+    password_hash: str,
+    name: str | None = None,
+    handle: str | None = None,
+) -> str:
+    """Insert a new user row. Returns the generated id.
+
+    If `handle` is provided it is validated and claimed atomically — raises
+    ValueError if the handle is invalid or taken.
+    """
+    if handle:
+        handle = _validate_handle(handle)
+
     with _get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO users (email, password_hash, name)
-                VALUES (%s, %s, %s)
+                INSERT INTO users (email, password_hash, name, handle, handle_changed_at)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (email, password_hash, name),
+                (email, password_hash, name, handle, None),
             )
             return cur.fetchone()[0]
+
+
+HANDLE_RE = re.compile(r"^[a-z0-9_]{3,20}$")
+HANDLE_LOCK_DAYS = 14
+HANDLE_CHANGE_COOLDOWN_DAYS = 14
+
+
+def _validate_handle(handle: str) -> str:
+    """Normalise to lowercase and validate format. Returns normalised handle or raises ValueError."""
+    handle = handle.strip().lower()
+    if not HANDLE_RE.match(handle):
+        raise ValueError(
+            "Handle must be 3–20 characters and contain only letters, numbers, or underscores."
+        )
+    return handle
+
+
+def claim_handle(user_id: str, new_handle: str) -> None:
+    """
+    Assign `new_handle` to `user_id`.
+
+    Rules (Instagram model):
+    - Format: 3–20 chars, [a-z0-9_] only (normalised to lowercase)
+    - Not already taken by another user
+    - Not locked: released by someone else within the last HANDLE_LOCK_DAYS days
+    - Rate-limited: user cannot change handle again within HANDLE_CHANGE_COOLDOWN_DAYS
+      (only applies when the user already has a handle — first-time claim is free)
+
+    Old handle is archived to user_handle_history so the lock window can be enforced
+    and history can be queried later.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    new_handle = _validate_handle(new_handle)
+    now = datetime.now(timezone.utc)
+    lock_cutoff = now - timedelta(days=HANDLE_LOCK_DAYS)
+    cooldown_cutoff = now - timedelta(days=HANDLE_CHANGE_COOLDOWN_DAYS)
+
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Fetch current user state
+            cur.execute(
+                "SELECT handle, handle_changed_at FROM users WHERE id = %s",
+                (user_id,),
+            )
+            user = cur.fetchone()
+            if not user:
+                raise ValueError("User not found.")
+
+            current_handle = user["handle"]
+            handle_changed_at = user["handle_changed_at"]
+
+            # No-op if same handle
+            if current_handle and current_handle.lower() == new_handle:
+                return
+
+            # Rate-limit: if user already has a handle, enforce cooldown
+            if current_handle and handle_changed_at and handle_changed_at > cooldown_cutoff:
+                days_left = (handle_changed_at + timedelta(days=HANDLE_CHANGE_COOLDOWN_DAYS) - now).days + 1
+                raise ValueError(
+                    f"You can only change your handle once every {HANDLE_CHANGE_COOLDOWN_DAYS} days. "
+                    f"Try again in {days_left} day(s)."
+                )
+
+            # Check not taken by another user
+            cur.execute(
+                "SELECT id FROM users WHERE LOWER(handle) = %s AND id != %s",
+                (new_handle, user_id),
+            )
+            if cur.fetchone():
+                raise ValueError("That handle is already taken.")
+
+            # Check not locked (recently released by someone else)
+            cur.execute(
+                """
+                SELECT 1 FROM user_handle_history
+                WHERE handle = %s
+                  AND released_at > %s
+                """,
+                (new_handle, lock_cutoff),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    "That handle was recently released and is temporarily unavailable. "
+                    f"Try again in a few days."
+                )
+
+            # Purge expired locks while we're here — rows older than the lock
+            # window are no longer load-bearing, so clean them up lazily.
+            cur.execute(
+                "DELETE FROM user_handle_history WHERE released_at < %s",
+                (lock_cutoff,),
+            )
+
+            # Archive the old handle before overwriting
+            if current_handle:
+                cur.execute(
+                    """
+                    INSERT INTO user_handle_history (user_id, handle, claimed_at, released_at)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (user_id, current_handle, handle_changed_at or now, now),
+                )
+
+            # Assign the new handle
+            cur.execute(
+                "UPDATE users SET handle = %s, handle_changed_at = %s WHERE id = %s",
+                (new_handle, now, user_id),
+            )
+
+
+def get_user_by_handle(handle: str) -> dict | None:
+    """Fetch a user row by handle (case-insensitive)."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM users WHERE LOWER(handle) = LOWER(%s)",
+                (handle.strip(),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def get_activity_stats(user_id: str, today_str: str) -> dict:
+    """Return activity streak + today's captured/completed/deferred counts for a user.
+
+    `today_str` is the caller's local date in ISO format (YYYY-MM-DD).
+    Streak is computed from UTC dates of capture creation.
+    """
+    from datetime import date, timedelta
+
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            # Captured today
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM captures
+                WHERE user_id = %s
+                  AND DATE(created_at) = %s::date
+                  AND status != 'deleted'
+                  AND capture_type NOT IN ('inbox', 'query')
+                """,
+                (user_id, today_str),
+            )
+            captured_today: int = cur.fetchone()[0]
+
+            # Completed today (status updated to a terminal state today)
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM captures
+                WHERE user_id = %s
+                  AND DATE(updated_at) = %s::date
+                  AND status IN ('done', 'absorbed', 'answered', 'archived')
+                """,
+                (user_id, today_str),
+            )
+            completed_today: int = cur.fetchone()[0]
+
+            # Deferred today (deferred_to set and updated today)
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM captures
+                WHERE user_id = %s
+                  AND DATE(updated_at) = %s::date
+                  AND (metadata->>'deferred_to') IS NOT NULL
+                  AND (metadata->>'deferred_to') > %s
+                """,
+                (user_id, today_str, today_str),
+            )
+            deferred_today: int = cur.fetchone()[0]
+
+            # Distinct UTC dates with captures — used for streak
+            cur.execute(
+                """
+                SELECT DISTINCT DATE(created_at) AS d
+                FROM captures
+                WHERE user_id = %s
+                  AND status != 'deleted'
+                  AND capture_type NOT IN ('inbox', 'query')
+                ORDER BY d DESC
+                LIMIT 365
+                """,
+                (user_id,),
+            )
+            capture_dates = [row[0] for row in cur.fetchall()]
+
+    streak = _compute_streak(capture_dates, today_str)
+    return {
+        "streak": streak,
+        "captured_today": captured_today,
+        "completed_today": completed_today,
+        "deferred_today": deferred_today,
+    }
+
+
+def _compute_streak(capture_dates: list, today_str: str) -> int:
+    """Count consecutive days ending today (or yesterday if nothing yet today)."""
+    from datetime import date, timedelta
+
+    if not capture_dates:
+        return 0
+    today = date.fromisoformat(today_str)
+    sorted_dates = sorted(set(capture_dates), reverse=True)
+    # Streak is broken if last activity was 2+ days ago
+    if sorted_dates[0] < today - timedelta(days=1):
+        return 0
+    streak = 0
+    cursor = today
+    for d in sorted_dates:
+        if d == cursor:
+            streak += 1
+            cursor -= timedelta(days=1)
+        elif d < cursor:
+            break
+    return streak
 
 
 def get_user_by_email(email: str) -> dict | None:

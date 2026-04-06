@@ -99,6 +99,12 @@ async def get_topics(x_user_id: str = Header(default="default")):
     return deduped
 
 
+@router.get("/captures/stats")
+def get_capture_stats(today: str = Query(...), x_user_id: str = Header(default="default")):
+    """Activity stats: streak + today's captured/completed/deferred counts."""
+    return db.get_activity_stats(x_user_id, today)
+
+
 @router.patch("/captures/topics/rename")
 def rename_topic(body: dict):
     """Rename a topic across all captures that share it."""

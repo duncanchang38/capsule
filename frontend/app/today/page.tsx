@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useCaptures } from "@/hooks/useCaptures";
-import { useReviewStreak } from "@/hooks/useReviewStreak";
+import { useActivityStats } from "@/hooks/useActivityStats";
+import type { ActivityStats } from "@/lib/api";
 import { useSelection } from "@/hooks/useSelection";
 import { clearDeleted, updateCaptureStatus, deferCapture as deferCaptureApi, scheduleCapture } from "@/lib/api";
 import { TYPE_CONFIG } from "@/lib/typeConfig";
@@ -91,18 +92,19 @@ interface Tab {
 function TabBar({
   tabs,
   active,
-  streak,
+  stats,
   selecting,
   onChange,
   onSelect,
 }: {
   tabs: Tab[];
   active: TabId;
-  streak: number;
+  stats: ActivityStats;
   selecting: boolean;
   onChange: (id: TabId) => void;
   onSelect: () => void;
 }) {
+  const hasActivity = stats.captured_today > 0 || stats.completed_today > 0 || stats.deferred_today > 0;
   return (
     <div className="sticky top-0 z-20 bg-[#f7f5f0] border-b border-stone-100 -mx-4 px-4 mb-0">
       <div className="flex items-center gap-0 overflow-x-auto scrollbar-none">
@@ -130,9 +132,9 @@ function TabBar({
           );
         })}
         <div className="ml-auto flex items-center gap-2 flex-shrink-0 pl-2">
-          {streak > 0 && (
+          {stats.streak > 0 && (
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-500 font-medium border border-amber-100">
-              {streak}d
+              {stats.streak}d
             </span>
           )}
           <button
@@ -145,13 +147,22 @@ function TabBar({
           </button>
         </div>
       </div>
+      {hasActivity && (
+        <div className="flex items-center gap-2 pb-1.5 text-[10px] text-stone-400">
+          {stats.captured_today > 0 && <span>{stats.captured_today} captured</span>}
+          {stats.captured_today > 0 && (stats.completed_today > 0 || stats.deferred_today > 0) && <span>·</span>}
+          {stats.completed_today > 0 && <span>{stats.completed_today} done</span>}
+          {stats.completed_today > 0 && stats.deferred_today > 0 && <span>·</span>}
+          {stats.deferred_today > 0 && <span>{stats.deferred_today} deferred</span>}
+        </div>
+      )}
     </div>
   );
 }
 
 export default function TodayPage() {
   const { captures, setCaptures, loading, error, refresh, markDone, deleteCapture, deferCapture, planToday } = useCaptures();
-  const { streak, reviewedToday, markReviewDone } = useReviewStreak();
+  const activityStats = useActivityStats();
   const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("schedule");
   const [clearConfirm, setClearConfirm] = useState<"idle" | "first" | "second">("idle");
@@ -347,7 +358,7 @@ export default function TodayPage() {
       <TabBar
         tabs={tabs}
         active={effectiveTab}
-        streak={streak}
+        stats={activityStats}
         selecting={selecting}
         onChange={(id) => { setActiveTab(id); cancelSelection(); window.scrollTo({ top: 0 }); }}
         onSelect={selecting ? cancelSelection : startSelecting}
@@ -369,20 +380,6 @@ export default function TodayPage() {
         {/* TODAY — scheduled + pending + done */}
         {effectiveTab === "schedule" && (
           <section>
-            {/* Review button at top */}
-            <div className="mb-4">
-              {reviewedToday ? (
-                <p className="text-[11px] text-stone-300 text-center py-1">Daily review done</p>
-              ) : (
-                <button
-                  onClick={markReviewDone}
-                  className="w-full py-2.5 bg-stone-800 text-white text-sm font-medium rounded-xl hover:bg-stone-700 transition-colors active:scale-[0.98]"
-                >
-                  Mark daily review done
-                </button>
-              )}
-            </div>
-
             {calendarToday.length === 0 && scheduledToday.length === 0 && pending.length === 0 ? (
               <p className="text-sm text-stone-400 py-2">Nothing on for today</p>
             ) : (

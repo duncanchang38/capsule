@@ -24,10 +24,14 @@ function CapsulePill({ inverted }: { inverted?: boolean }) {
   );
 }
 
+const AUTH_PATHS = new Set(["/login", "/reset-password"]);
+
 export function Nav() {
   const pathname = usePathname();
   const isHome = pathname === "/";
   const { data: session } = useSession();
+
+  if (AUTH_PATHS.has(pathname)) return null;
 
   return (
     <nav className="flex items-center gap-1 px-4 py-2.5 border-b border-[#e8e4db] bg-white overflow-x-auto">

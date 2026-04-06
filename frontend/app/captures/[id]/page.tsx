@@ -14,6 +14,8 @@ import Typography from "@tiptap/extension-typography";
 import { getCapture, updateNotes, organizeNotes, getRelatedCaptures, updateCaptureStatus, deferCapture as deferCaptureApi, scheduleCapture, dismissMergeSuggestion, mergeCapture, reEnrich } from "@/lib/api";
 import { TYPE_CONFIG } from "@/lib/typeConfig";
 import type { Capture } from "@/lib/api";
+import { useRecentViews } from "@/hooks/useRecentViews";
+import { RecentViewsSidebar } from "@/components/RecentViewsSidebar";
 
 const RELATED_TYPES = new Set(["to_learn", "to_cook", "to_know"]);
 
@@ -223,6 +225,7 @@ export default function CaptureEditorPage() {
   const router = useRouter();
   const id = Number(params.id);
 
+  const { recentViews, recordView } = useRecentViews(id);
   const [capture, setCapture] = useState<Capture | null>(null);
   const [loading, setLoading] = useState(true);
   const [organizing, setOrganizing] = useState(false);
@@ -293,6 +296,7 @@ export default function CaptureEditorPage() {
     getCapture(id)
       .then((c) => {
         setCapture(c);
+        recordView(c);
         setMergeSuggestion((c.metadata?.merge_suggestion as MergeSuggestion) ?? null);
         if (editor) {
           editor.commands.setContent(buildEditorContent(c.notes, c.summary));
@@ -651,6 +655,8 @@ export default function CaptureEditorPage() {
       </div>
 
       {RELATED_TYPES.has(capture.capture_type) && <RelatedSection capture={capture} />}
+
+      <RecentViewsSidebar views={recentViews} />
 
       {/* AI Organize confirmation */}
       {organizePreview && (
