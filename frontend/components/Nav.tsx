@@ -3,6 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
+import { useState, useRef, useEffect } from "react";
+
+function getInitials(nameOrEmail: string): string {
+  const name = nameOrEmail.split("@")[0]; // strip email domain
+  return name
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("");
+}
 
 const links = [
   { href: "/today", label: "Today" },
@@ -21,6 +32,69 @@ function CapsulePill({ inverted }: { inverted?: boolean }) {
         className={`absolute inset-y-0 left-1/2 w-px ${inverted ? "bg-stone-900/25" : "bg-white/25"}`}
       />
     </span>
+  );
+}
+
+function ProfileMenu({ initials, label }: { initials: string; label: string }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (
+        menuRef.current && !menuRef.current.contains(e.target as Node) &&
+        btnRef.current && !btnRef.current.contains(e.target as Node)
+      ) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  function handleOpen() {
+    if (btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
+    }
+    setOpen((v) => !v);
+  }
+
+  return (
+    <div className="ml-auto flex-shrink-0 pl-2">
+      <button
+        ref={btnRef}
+        onClick={handleOpen}
+        title={label}
+        className="flex items-center justify-center w-8 h-8 rounded-[8px] bg-stone-900 text-white text-[11px] font-semibold select-none hover:opacity-80 transition-opacity"
+      >
+        {initials}
+      </button>
+
+      {open && pos && (
+        <div
+          ref={menuRef}
+          style={{ position: "fixed", top: pos.top, right: pos.right }}
+          className="w-44 bg-white border border-[#e8e4db] rounded-xl shadow-md py-1 z-50"
+        >
+          <Link
+            href="/profile"
+            onClick={() => setOpen(false)}
+            className="block px-3.5 py-2 text-sm text-stone-700 hover:bg-stone-50 transition-colors"
+          >
+            Settings
+          </Link>
+          <div className="h-px bg-[#e8e4db] mx-3 my-1" />
+          <button
+            onClick={() => { setOpen(false); signOut({ callbackUrl: "/login" }); }}
+            className="w-full text-left px-3.5 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -73,17 +147,10 @@ export function Nav() {
       })}
 
       {session?.user && (
-        <div className="ml-auto flex items-center gap-2 flex-shrink-0 pl-2">
-          <span className="text-xs text-stone-400 hidden sm:block">
-            {session.user.name || session.user.email}
-          </span>
-          <button
-            onClick={() => signOut({ callbackUrl: "/login" })}
-            className="px-2.5 py-1 text-xs text-stone-500 hover:text-stone-800 hover:bg-stone-100 rounded-lg transition-colors"
-          >
-            Sign out
-          </button>
-        </div>
+        <ProfileMenu
+          initials={getInitials(session.user.name || session.user.email || "?")}
+          label={session.user.name || session.user.email || "Profile"}
+        />
       )}
     </nav>
   );
