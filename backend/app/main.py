@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, redirect_slashes=False)
 
 _allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 

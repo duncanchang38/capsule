@@ -42,6 +42,7 @@ export function CaptureListRow({
   selecting = false,
   selected = false,
   onSelect,
+  onPreview,
 }: {
   capture: Capture;
   handlers?: CaptureRowHandlers;
@@ -51,6 +52,7 @@ export function CaptureListRow({
   selecting?: boolean;
   selected?: boolean;
   onSelect?: (id: number) => void;
+  onPreview?: (capture: Capture) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [resolved, setResolved] = useState(false);
@@ -184,6 +186,19 @@ export function CaptureListRow({
             {rightExtras}
             <TypeBadge type={capture.capture_type} />
           </button>
+        ) : onPreview ? (
+          // leftIndicator lives outside the row button to avoid nested <button> in HTML
+          <>
+            {leftIndicator}
+            <button
+              onClick={() => onPreview(capture)}
+              className="flex items-start gap-3 flex-1 min-w-0 rounded-lg hover:bg-stone-50 transition-colors text-left"
+            >
+              {textBlock}
+              {rightExtras}
+              <TypeBadge type={capture.capture_type} />
+            </button>
+          </>
         ) : (
           <Link
             href={`/captures/${capture.id}`}

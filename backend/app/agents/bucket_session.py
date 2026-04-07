@@ -11,7 +11,6 @@ COMPLETION_MAP = {
     "to_learn": "absorb",
     "to_cook":  "persist",
     "to_know":  "answer",
-    "inbox":    "inbox",
     "query":    None,   # noop — never stored
 }
 

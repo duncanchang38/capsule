@@ -193,3 +193,9 @@ Key routing rules:
 - Architecture review → invoke plan-eng-review
 - Save progress, checkpoint, resume → invoke checkpoint
 - Code quality, health check → invoke health
+
+## Health Stack
+
+- typecheck: cd frontend && npx tsc --noEmit
+- lint: cd frontend && npm run lint
+- test: cd backend && pytest

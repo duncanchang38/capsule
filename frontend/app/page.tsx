@@ -98,7 +98,7 @@ export default function Home() {
       {/* Editor */}
       <EditorContent editor={editor} />
 
-      {/* Formatting toolbar — sits just above the nav bar */}
+      {/* Formatting toolbar + capture button — sits just above the nav bar */}
       <div className="fixed bottom-16 left-0 right-0 flex justify-center pointer-events-none">
         <div className="pointer-events-auto flex items-center gap-1 bg-white border border-[#e8e4db] rounded-2xl px-3 py-2 shadow-sm">
           <ToolbarBtn onClick={() => editor?.chain().focus().toggleBulletList().run()}
@@ -117,29 +117,25 @@ export default function Home() {
           <ToolbarBtn onClick={handleImageUpload} title="Image">
             <ImgIcon />
           </ToolbarBtn>
-        </div>
-      </div>
-
-      {/* Save button — full-width, above the toolbar */}
-      <div className="fixed bottom-[calc(4rem+52px)] left-0 right-0 px-4 flex justify-center pointer-events-none">
-        <div className="pointer-events-auto w-full max-w-2xl">
+          <div className="w-px h-4 bg-stone-200 mx-0.5" />
           <button
             onClick={handleSave}
             disabled={!hasContent || saveState === "saving"}
-            className={`w-full py-3 rounded-2xl text-sm font-semibold transition-all active:scale-[0.98] ${
+            title="Capture"
+            className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-90 ${
               !hasContent
-                ? "bg-stone-100 text-stone-300 cursor-default"
+                ? "text-stone-200 cursor-default"
                 : saveState === "saving"
-                ? "bg-stone-800 text-white/70 cursor-default"
-                : "bg-stone-900 text-white hover:bg-stone-700 shadow-sm"
+                ? "bg-stone-800 text-white/60 cursor-default"
+                : "bg-stone-900 text-white hover:bg-stone-700"
             }`}
           >
-            {saveState === "saving" ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-3.5 h-3.5 border border-white/50 border-t-transparent rounded-full animate-spin" />
-                Capturing…
-              </span>
-            ) : "Capture"}
+            {saveState === "saving"
+              ? <span className="w-3 h-3 border border-white/50 border-t-transparent rounded-full animate-spin inline-block" />
+              : <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M2 7h8.5M8 4l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+            }
           </button>
         </div>
       </div>

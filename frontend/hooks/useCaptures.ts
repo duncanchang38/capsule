@@ -69,6 +69,12 @@ export function useCaptures() {
     await deferCaptureApi(id, deferTo);
   }, []);
 
+  const patchSummary = useCallback((id: number, summary: string) => {
+    setCaptures((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, summary } : c))
+    );
+  }, []);
+
   const planToday = useCallback(async (id: number) => {
     // Use local date so it matches how the user thinks about "today"
     const now = new Date();
@@ -77,5 +83,5 @@ export function useCaptures() {
     await refresh();
   }, [refresh]);
 
-  return { captures, setCaptures, loading, error, refresh, markDone, deleteCapture, deferCapture, planToday };
+  return { captures, setCaptures, loading, error, refresh, markDone, deleteCapture, deferCapture, planToday, patchSummary };
 }

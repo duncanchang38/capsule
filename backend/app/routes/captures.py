@@ -2,9 +2,10 @@ import json
 import logging
 from datetime import date, timedelta, datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from app.storage import db
 from app.agents.client import anthropic_client as _anthropic, HAIKU
+from app.auth.deps import CurrentUser
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ async def _dedup_topics(topics: list[dict]) -> list[dict]:
 
 
 @router.post("/captures/save")
-async def save_capture_direct(body: dict, x_user_id: str = Header(default="default")):
+async def save_capture_direct(body: dict, user_id: CurrentUser):
     """Classify and save a capture directly, bypassing the chat state machine."""
     content = (body.get("content") or "").strip()
     notes = body.get("notes")  # optional HTML from rich text editor
@@ -77,7 +78,7 @@ async def save_capture_direct(body: dict, x_user_id: str = Header(default="defau
         return {"ok": True, "capture_type": "query", "summary": result.summary, "id": None}
 
     bucket = BucketSession()
-    row_id = await bucket.store(content, result, user_id=x_user_id)
+    row_id = await bucket.store(content, result, user_id=user_id)
 
     if row_id and notes:
         db.update_notes(row_id, notes)
@@ -92,17 +93,23 @@ async def save_capture_direct(body: dict, x_user_id: str = Header(default="defau
 
 
 @router.get("/captures/topics")
-async def get_topics(x_user_id: str = Header(default="default")):
+async def get_topics(user_id: CurrentUser):
     """Return deduplicated topic list with counts."""
-    raw = db.get_topics(limit=30, user_id=x_user_id)
+    raw = db.get_topics(limit=30, user_id=user_id)
     deduped = await _dedup_topics(raw)
     return deduped
 
 
 @router.get("/captures/stats")
-def get_capture_stats(today: str = Query(...), x_user_id: str = Header(default="default")):
+def get_capture_stats(user_id: CurrentUser, today: str = Query(...)):
     """Activity stats: streak + today's captured/completed/deferred counts."""
-    return db.get_activity_stats(x_user_id, today)
+    return db.get_activity_stats(user_id, today)
+
+
+@router.get("/captures/graph")
+def get_capture_graph(user_id: CurrentUser):
+    """Return entity graph: nodes (captures) + edges (shared entities)."""
+    return db.get_entity_graph(user_id=user_id)
 
 
 @router.patch("/captures/topics/rename")
@@ -116,9 +123,29 @@ def rename_topic(body: dict):
     return {"updated": count}
 
 
+@router.get("/captures/tags")
+def get_all_tags(user_id: CurrentUser):
+    """Return all distinct tag values (from tags array + legacy topic field)."""
+    return db.get_all_tags(user_id=user_id)
+
+
+@router.patch("/captures/{capture_id}/tags")
+def update_tags(capture_id: int, body: dict, user_id: CurrentUser):
+    """Set the tags array for a capture."""
+    tags = body.get("tags")
+    if not isinstance(tags, list):
+        raise HTTPException(status_code=400, detail="tags must be a list")
+    tags = [str(t).strip() for t in tags if str(t).strip()]
+    capture = db.get_capture(capture_id, user_id=user_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    db.update_capture_tags(capture_id, tags)
+    return {"ok": True, "tags": tags}
+
+
 @router.get("/captures/{capture_id}")
-def get_capture_by_id(capture_id: int, x_user_id: str = Header(default="default")):
-    capture = db.get_capture(capture_id, user_id=x_user_id)
+def get_capture_by_id(capture_id: int, user_id: CurrentUser):
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     return capture
@@ -126,27 +153,27 @@ def get_capture_by_id(capture_id: int, x_user_id: str = Header(default="default"
 
 @router.get("/captures")
 def get_captures(
+    user_id: CurrentUser,
     view: Optional[str] = Query(default=None),
     capture_type: Optional[str] = Query(default=None),
     topic: Optional[str] = Query(default=None),
-    x_user_id: str = Header(default="default"),
 ):
     if topic is not None:
-        return db.get_by_topic(topic, user_id=x_user_id)
+        return db.get_captures_by_tag(topic, user_id=user_id)
     if view is not None:
-        return db.get_by_view(view, user_id=x_user_id)
+        return db.get_by_view(view, user_id=user_id)
     if capture_type is not None:
-        return db.get_recent(capture_type=capture_type, limit=100, user_id=x_user_id)
-    return db.get_recent(limit=100, user_id=x_user_id)
+        return db.get_recent(capture_type=capture_type, limit=100, user_id=user_id)
+    return db.get_recent(limit=100, user_id=user_id)
 
 
 @router.patch("/captures/{capture_id}/status")
-def update_status(capture_id: int, body: dict, x_user_id: str = Header(default="default")):
+def update_status(capture_id: int, body: dict, user_id: CurrentUser):
     status = body.get("status")
     if not status:
         return {"error": "status required"}
 
-    capture = db.get_capture(capture_id, user_id=x_user_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
 
@@ -169,13 +196,13 @@ def update_status(capture_id: int, body: dict, x_user_id: str = Header(default="
 
 
 @router.patch("/captures/{capture_id}/stage")
-def update_stage(capture_id: int, body: dict, x_user_id: str = Header(default="default")):
+def update_stage(capture_id: int, body: dict, user_id: CurrentUser):
     stage = body.get("stage")
     if not stage:
         return {"error": "stage required"}
     if stage not in VALID_STAGES:
         return {"error": f"stage must be one of {sorted(VALID_STAGES)}"}
-    capture = db.get_capture(capture_id, user_id=x_user_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     db.merge_metadata(capture_id, {"stage": stage})
@@ -183,7 +210,7 @@ def update_stage(capture_id: int, body: dict, x_user_id: str = Header(default="d
 
 
 @router.patch("/captures/{capture_id}/schedule")
-def schedule_capture(capture_id: int, body: dict, x_user_id: str = Header(default="default")):
+def schedule_capture(capture_id: int, body: dict, user_id: CurrentUser):
     """Update a capture's calendar slot: deadline, time, and/or duration."""
     deadline = body.get("deadline")
     time = body.get("time")
@@ -192,7 +219,7 @@ def schedule_capture(capture_id: int, body: dict, x_user_id: str = Header(defaul
     if deadline is None and time is None and duration_mins is None:
         return {"error": "at least one of deadline, time, or duration_mins required"}
 
-    capture = db.get_capture(capture_id, user_id=x_user_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
 
@@ -201,10 +228,10 @@ def schedule_capture(capture_id: int, body: dict, x_user_id: str = Header(defaul
 
 
 @router.post("/captures/{capture_id}/sprint-preview")
-async def sprint_preview(capture_id: int, body: dict):
+async def sprint_preview(capture_id: int, body: dict, user_id: CurrentUser):
     """Return AI-generated session names without creating captures."""
     count = max(2, min(8, int(body.get("count", 3))))
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     from app.agents.sprint_agent import generate_sprint_names
@@ -218,11 +245,12 @@ _COMPLETION_MAP = {
     "to_cook": "persist",
     "to_know": "answer",
     "calendar": "archive",
+    "project": "archive",
 }
 
 
 @router.post("/captures/{capture_id}/sprints")
-async def create_sprints(capture_id: int, body: dict):
+async def create_sprints(capture_id: int, body: dict, user_id: CurrentUser):
     """Break a capture into N scheduled sprint sessions."""
     count = max(2, min(8, int(body.get("count", 3))))
     duration_mins = int(body.get("duration_mins", 60))
@@ -232,7 +260,7 @@ async def create_sprints(capture_id: int, body: dict):
     # spacing: "daily" | "every_other" | "weekly" (default: daily on weekdays)
     spacing = body.get("spacing", "daily")
 
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
 
@@ -285,47 +313,131 @@ async def create_sprints(capture_id: int, body: dict):
 
 
 @router.patch("/captures/{capture_id}/defer")
-def defer_capture(capture_id: int, body: dict):
+def defer_capture(capture_id: int, body: dict, user_id: CurrentUser):
     """Defer a capture to a future date (default: tomorrow)."""
     from datetime import date, timedelta
     defer_to = body.get("defer_to") or (date.today() + timedelta(days=1)).isoformat()
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     db.merge_metadata(capture_id, {"deferred_to": defer_to})
     return {"ok": True, "deferred_to": defer_to}
 
 
+VALID_TYPES = {"to_hit", "to_learn", "to_cook", "to_know", "calendar", "project", "inbox"}
+
+@router.patch("/captures/{capture_id}/type")
+def update_capture_type(capture_id: int, body: dict, user_id: CurrentUser):
+    """Change the capture type (and derived completion_type) for a capture."""
+    new_type = (body.get("capture_type") or "").strip()
+    if new_type not in VALID_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid type. Must be one of: {VALID_TYPES}")
+    capture = db.get_capture(capture_id, user_id=user_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    db.update_capture_type(capture_id, new_type)
+    return {"ok": True, "capture_type": new_type}
+
+
+@router.patch("/captures/{capture_id}/topic")
+def update_topic(capture_id: int, body: dict, user_id: CurrentUser):
+    """Update the topic for a capture."""
+    topic = (body.get("topic") or "").strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="topic required")
+    capture = db.get_capture(capture_id, user_id=user_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    db.update_capture_topic(capture_id, topic)
+    return {"ok": True, "topic": topic}
+
+
+_SUGGEST_TITLE_SYSTEM = """You are a title editor for a personal knowledge base.
+Given a document's content, suggest a single clear, descriptive title for it.
+
+Rules:
+- The title should be concise (2-8 words) and describe what the document IS or COVERS
+- Prefer specific over generic: "Tokyo Trip Planning — May 2026" beats "Trip Notes"
+- Use title case
+- Return ONLY the title text — no quotes, no punctuation at end, no explanation
+"""
+
+
+@router.post("/captures/{capture_id}/suggest-title")
+async def suggest_title(capture_id: int, user_id: CurrentUser):
+    """Use AI to suggest a better document title based on its content."""
+    capture = db.get_capture(capture_id, user_id=user_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+
+    current_title = capture.get("summary", "")
+    content_preview = (capture.get("notes") or capture.get("content") or "")[:1500]
+
+    prompt = f"Current title: {current_title}\n\nDocument content:\n{content_preview}"
+
+    response = await _anthropic.messages.create(
+        model=HAIKU,
+        max_tokens=40,
+        system=_SUGGEST_TITLE_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    suggested = response.content[0].text.strip().strip('"').strip("'")
+    return {"suggested": suggested, "current": current_title}
+
+
 @router.patch("/captures/{capture_id}/notes")
-def update_notes(capture_id: int, body: dict, x_user_id: str = Header(default="default")):
+def update_notes(capture_id: int, body: dict, user_id: CurrentUser):
     """Save the free-form notes for a capture."""
     notes = body.get("notes", "")
-    capture = db.get_capture(capture_id, user_id=x_user_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     db.update_notes(capture_id, notes)
     return {"ok": True}
 
 
+@router.patch("/captures/{capture_id}/summary")
+def update_summary(capture_id: int, body: dict, user_id: CurrentUser):
+    """Update the display summary for a capture (synced from editor H1)."""
+    summary = (body.get("summary") or "").strip()
+    if not summary:
+        return {"error": "summary required"}
+    capture = db.get_capture(capture_id, user_id=user_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    db.update_summary(capture_id, summary)
+    return {"ok": True}
+
+
 @router.get("/captures/{capture_id}/related")
-def get_related(capture_id: int, limit: int = 5):
+def get_related(capture_id: int, user_id: CurrentUser, limit: int = 5):
     """Return captures related by entity overlap (GraphRAG). Excludes self."""
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     related = db.get_related_by_entities(capture_id, limit=limit, min_score=0.3)
     return {"related": related}
 
 
+@router.get("/captures/{capture_id}/backlinks")
+def get_backlinks(capture_id: int, user_id: CurrentUser, limit: int = 10):
+    """Return captures that share at least one tag with this capture (structural backlinks)."""
+    capture = db.get_capture(capture_id, user_id=user_id)
+    if not capture:
+        raise HTTPException(status_code=404, detail="Capture not found")
+    backlinks = db.get_backlinks(capture_id, user_id=user_id, limit=limit)
+    return {"backlinks": backlinks}
+
+
 @router.post("/captures/{capture_id}/organize")
-async def organize_notes(capture_id: int):
+async def organize_notes(capture_id: int, user_id: CurrentUser):
     """
     AI-organize the capture's notes.
     If the capture belongs to an entity cluster, synthesize the whole cluster.
     Falls back to single-capture organize when no cluster is found.
     Also checks for merge candidates (user-triggered, so no auto-background cost).
     """
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     if not capture.get("notes", "").strip():
@@ -368,9 +480,9 @@ async def organize_notes(capture_id: int):
 
 
 @router.patch("/captures/{capture_id}/dismiss-merge")
-def dismiss_merge_suggestion(capture_id: int):
+def dismiss_merge_suggestion(capture_id: int, user_id: CurrentUser):
     """Remove the merge_suggestion from a capture's metadata."""
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     meta = dict(capture.get("metadata") or {})
@@ -380,7 +492,7 @@ def dismiss_merge_suggestion(capture_id: int):
 
 
 @router.post("/captures/{capture_id}/merge-into/{target_id}")
-def merge_capture(capture_id: int, target_id: int):
+def merge_capture(capture_id: int, target_id: int, user_id: CurrentUser):
     """
     Merge capture_id into target_id:
     - Append capture_id's notes to target_id's notes (if any)
@@ -388,8 +500,8 @@ def merge_capture(capture_id: int, target_id: int):
     - Remove merge_suggestion from both
     """
     try:
-        source = db.get_capture(capture_id)
-        target = db.get_capture(target_id)
+        source = db.get_capture(capture_id, user_id=user_id)
+        target = db.get_capture(target_id, user_id=user_id)
         if not source or not target:
             raise HTTPException(status_code=404, detail="Capture not found")
 
@@ -418,9 +530,9 @@ def merge_capture(capture_id: int, target_id: int):
 
 
 @router.post("/captures/{capture_id}/re-enrich")
-async def re_enrich(capture_id: int):
+async def re_enrich(capture_id: int, user_id: CurrentUser):
     """Re-run enrichment for a capture (useful when title/topic was wrong on first pass)."""
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     import asyncio
@@ -436,9 +548,9 @@ async def re_enrich(capture_id: int):
 
 
 @router.patch("/captures/{capture_id}/restore")
-def restore_capture(capture_id: int):
+def restore_capture(capture_id: int, user_id: CurrentUser):
     """Restore an archived capture back to active status."""
-    capture = db.get_capture(capture_id)
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     db.update_status(capture_id, "active")
@@ -449,8 +561,8 @@ def restore_capture(capture_id: int):
 
 
 @router.post("/captures/{capture_id}/tasks")
-async def generate_tasks(capture_id: int):
-    capture = db.get_capture(capture_id)
+async def generate_tasks(capture_id: int, user_id: CurrentUser):
+    capture = db.get_capture(capture_id, user_id=user_id)
     if not capture:
         raise HTTPException(status_code=404, detail="Capture not found")
     if capture["capture_type"] != "to_cook":

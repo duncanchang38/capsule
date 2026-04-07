@@ -28,8 +28,13 @@ export default auth(function middleware(
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
-  // Inject user ID into proxied API requests so FastAPI knows who is calling
-  const userId = req.auth?.user?.id ?? "default";
+  // Inject user ID into proxied API requests so FastAPI knows who is calling.
+  // If the session exists but user.id is somehow undefined, redirect to login
+  // rather than falling through with a placeholder that bypasses user isolation.
+  const userId = req.auth?.user?.id;
+  if (!userId) {
+    return NextResponse.redirect(new URL("/login", req.url));
+  }
   const headers = new Headers(req.headers);
   headers.set("x-user-id", userId);
   return NextResponse.next({ request: { headers } });

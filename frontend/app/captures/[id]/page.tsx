@@ -11,13 +11,14 @@ import Link2 from "@tiptap/extension-link";
 import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
 import Typography from "@tiptap/extension-typography";
-import { getCapture, updateNotes, organizeNotes, getRelatedCaptures, updateCaptureStatus, deferCapture as deferCaptureApi, scheduleCapture, dismissMergeSuggestion, mergeCapture, reEnrich } from "@/lib/api";
+import { getCapture, updateNotes, updateCaptureSummary, organizeNotes, getRelatedCaptures, updateCaptureStatus, deferCapture as deferCaptureApi, scheduleCapture, dismissMergeSuggestion, mergeCapture, reEnrich } from "@/lib/api";
 import { TYPE_CONFIG } from "@/lib/typeConfig";
 import type { Capture } from "@/lib/api";
+import { useSession } from "next-auth/react";
 import { useRecentViews } from "@/hooks/useRecentViews";
 import { RecentViewsSidebar } from "@/components/RecentViewsSidebar";
 
-const RELATED_TYPES = new Set(["to_learn", "to_cook", "to_know"]);
+const RELATED_TYPES = new Set(["to_learn", "to_cook", "to_know", "project"]);
 
 /** True if a string is a bare URL (http/https, no surrounding text). */
 function _isBareUrl(s: string): boolean {
@@ -224,8 +225,10 @@ export default function CaptureEditorPage() {
   const params = useParams();
   const router = useRouter();
   const id = Number(params.id);
+  const { data: session } = useSession();
+  const userId = session?.user?.id;
 
-  const { recentViews, recordView } = useRecentViews(id);
+  const { recentViews, recordView } = useRecentViews(id, userId);
   const [capture, setCapture] = useState<Capture | null>(null);
   const [loading, setLoading] = useState(true);
   const [organizing, setOrganizing] = useState(false);
@@ -236,10 +239,23 @@ export default function CaptureEditorPage() {
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [bubblePos, setBubblePos] = useState<{ top: number; left: number } | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const summaryRef = useRef<string>("");
 
   const save = useCallback(async (html: string) => {
     setSaveStatus("saving");
     await updateNotes(id, html);
+
+    // Sync the H1 heading back to the summary field so list views stay consistent.
+    const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+    if (h1Match) {
+      const h1Text = h1Match[1].replace(/<[^>]+>/g, "").trim();
+      if (h1Text && h1Text !== summaryRef.current) {
+        summaryRef.current = h1Text;
+        await updateCaptureSummary(id, h1Text);
+        setCapture((prev) => prev ? { ...prev, summary: h1Text } : prev);
+      }
+    }
+
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 2000);
   }, [id]);
@@ -296,6 +312,7 @@ export default function CaptureEditorPage() {
     getCapture(id)
       .then((c) => {
         setCapture(c);
+        summaryRef.current = c.summary;
         recordView(c);
         setMergeSuggestion((c.metadata?.merge_suggestion as MergeSuggestion) ?? null);
         if (editor) {
@@ -651,6 +668,12 @@ export default function CaptureEditorPage() {
               ? <span className="w-3 h-3 border border-stone-400 border-t-transparent rounded-full animate-spin inline-block" />
               : <span className="text-[11px] leading-none">✦</span>}
           </ToolbarBtn>
+          <div className="w-px h-4 bg-stone-200 mx-0.5" />
+          <ToolbarBtn onClick={() => router.push("/")} title="New capture">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </ToolbarBtn>
         </div>
       </div>
 
@@ -662,7 +685,7 @@ export default function CaptureEditorPage() {
       {organizePreview && (
         <>
           <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px]" onClick={() => setOrganizePreview(null)} />
-          <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl shadow-[0_-8px_40px_rgba(0,0,0,0.12)] border-t border-[#e8e4db] max-h-[70vh] flex flex-col"
+          <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-2xl z-50 bg-white rounded-t-2xl shadow-[0_-8px_40px_rgba(0,0,0,0.12)] border-t border-[#e8e4db] max-h-[70vh] flex flex-col"
             style={{ animation: "drawerSlideUp 280ms ease-out both" }}>
             <div className="flex justify-center pt-3 pb-2 flex-shrink-0">
               <div className="w-8 h-1 rounded-full bg-stone-200" />
@@ -717,7 +740,29 @@ export default function CaptureEditorPage() {
           height: 0;
         }
         .ProseMirror p { margin-top: 0.4em; margin-bottom: 0.4em; }
-        .ProseMirror h1 { margin-bottom: 0.5em; }
+        .ProseMirror h1 {
+          font-size: 1.6rem;
+          font-weight: 700;
+          margin-top: 0;
+          margin-bottom: 0.2em;
+          line-height: 1.25;
+          color: #1c1917;
+        }
+        .ProseMirror h2 {
+          font-size: 1.1rem;
+          font-weight: 600;
+          margin-top: 1.2em;
+          margin-bottom: 0.3em;
+          line-height: 1.35;
+          color: #1c1917;
+        }
+        .ProseMirror h3 {
+          font-size: 0.95rem;
+          font-weight: 600;
+          margin-top: 1em;
+          margin-bottom: 0.25em;
+          color: #44403c;
+        }
         .ProseMirror ul[data-type="taskList"] { list-style: none; padding: 0; }
         .ProseMirror ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 8px; }
         .ProseMirror ul[data-type="taskList"] li > label { margin-top: 2px; flex-shrink: 0; }
@@ -728,6 +773,7 @@ export default function CaptureEditorPage() {
         .ProseMirror a { color: #3b82f6; text-decoration: underline; }
         .ProseMirror img { max-width: 100%; border-radius: 8px; margin: 8px 0; }
         .ProseMirror blockquote { border-left: 3px solid #e7e5e4; padding-left: 16px; color: #78716c; }
+        .ProseMirror ::selection { background-color: rgba(168, 131, 89, 0.18); color: inherit; }
       `}</style>
     </div>
   );

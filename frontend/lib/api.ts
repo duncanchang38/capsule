@@ -57,6 +57,15 @@ export interface Capture {
   updated_at: string;
 }
 
+/** Get tags for a capture — reads tags array, falls back to [topic] for legacy captures. */
+export function getCaptureTags(capture: Capture): string[] {
+  const tags = capture.metadata?.tags;
+  if (Array.isArray(tags) && tags.length > 0) return tags as string[];
+  const topic = capture.metadata?.topic;
+  if (typeof topic === "string" && topic) return [topic];
+  return [];
+}
+
 export interface SaveResult {
   ok: boolean;
   id: number | null;
@@ -165,6 +174,22 @@ export async function updateNotes(id: number, notes: string): Promise<void> {
   });
 }
 
+export async function updateCaptureType(id: number, captureType: string): Promise<void> {
+  await fetch(`/api/captures/${id}/type`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ capture_type: captureType }),
+  });
+}
+
+export async function updateCaptureSummary(id: number, summary: string): Promise<void> {
+  await fetch(`/api/captures/${id}/summary`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ summary }),
+  });
+}
+
 export interface OrganizeResult {
   notes: string;
   mode: "single" | "cluster";
@@ -232,6 +257,13 @@ export async function getRelatedCaptures(id: number, limit = 5): Promise<Capture
   return data.related ?? [];
 }
 
+export async function getBacklinks(id: number, limit = 10): Promise<Capture[]> {
+  const res = await fetch(`/api/captures/${id}/backlinks?limit=${limit}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.backlinks ?? [];
+}
+
 export async function dismissMergeSuggestion(id: number): Promise<void> {
   await fetch(`/api/captures/${id}/dismiss-merge`, { method: "PATCH" });
 }
@@ -252,6 +284,60 @@ export async function restoreCapture(id: number): Promise<void> {
 export async function clearDeleted(): Promise<void> {
   const res = await fetch("/api/captures/deleted", { method: "DELETE" });
   if (!res.ok) throw new Error("Failed to clear deleted items");
+}
+
+export interface GraphNode {
+  id: number;
+  summary: string;
+  type: string;
+  topic: string | null;
+  tags: string[];
+  status: string;
+}
+
+export interface GraphLink {
+  source: number;
+  target: number;
+  weight: number;
+}
+
+export interface EntityGraph {
+  nodes: GraphNode[];
+  links: GraphLink[];
+}
+
+export async function getEntityGraph(): Promise<EntityGraph> {
+  const res = await fetch("/api/captures/graph");
+  if (!res.ok) return { nodes: [], links: [] };
+  return res.json();
+}
+
+export async function updateCaptureTopic(id: number, topic: string): Promise<void> {
+  await fetch(`/api/captures/${id}/topic`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic }),
+  });
+}
+
+export async function suggestTitle(id: number): Promise<{ suggested: string; current: string }> {
+  const res = await fetch(`/api/captures/${id}/suggest-title`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to suggest title");
+  return res.json();
+}
+
+export async function updateCaptureTags(id: number, tags: string[]): Promise<void> {
+  await fetch(`/api/captures/${id}/tags`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags }),
+  });
+}
+
+export async function getAllTags(): Promise<string[]> {
+  const res = await fetch("/api/captures/tags");
+  if (!res.ok) return [];
+  return res.json();
 }
 
 export async function renameTopic(from: string, to: string): Promise<void> {

@@ -119,6 +119,10 @@ def init() -> None:
                     ADD COLUMN IF NOT EXISTS handle_changed_at TIMESTAMPTZ
             """)
             cur.execute("""
+                ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS bio TEXT
+            """)
+            cur.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_handle_ci
                 ON users (LOWER(handle))
                 WHERE handle IS NOT NULL
@@ -276,6 +280,172 @@ def update_summary(capture_id: int, summary: str) -> None:
                 "UPDATE captures SET summary = %s, updated_at = NOW() WHERE id = %s",
                 (summary, capture_id),
             )
+
+
+COMPLETION_MAP = {
+    "to_hit":   "archive",
+    "calendar": "archive",
+    "to_learn": "absorb",
+    "to_cook":  "persist",
+    "to_know":  "answer",
+    "project":  "archive",
+}
+
+def update_capture_type(capture_id: int, capture_type: str) -> None:
+    completion_type = COMPLETION_MAP.get(capture_type, "archive")
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE captures SET capture_type = %s, completion_type = %s, updated_at = NOW() WHERE id = %s",
+                (capture_type, completion_type, capture_id),
+            )
+
+
+def update_capture_topic(capture_id: int, topic: str) -> None:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE captures SET metadata = jsonb_set(metadata, '{topic}', %s::jsonb), updated_at = NOW() WHERE id = %s",
+                (json.dumps(topic), capture_id),
+            )
+
+
+def get_all_topic_names(user_id: str = "default") -> list[str]:
+    """Return all distinct non-empty topic names for this user."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT metadata->>'topic'
+                FROM captures
+                WHERE status = 'active'
+                  AND metadata->>'topic' IS NOT NULL
+                  AND metadata->>'topic' != ''
+                  AND user_id = %s
+                ORDER BY 1
+                """,
+                (user_id,),
+            )
+            return [row[0] for row in cur.fetchall()]
+
+
+def get_all_tags(user_id: str = "default") -> list[str]:
+    """Return all distinct non-empty tag values (from tags array + legacy topic field)."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT tag
+                FROM (
+                    SELECT jsonb_array_elements_text(metadata->'tags') AS tag
+                    FROM captures
+                    WHERE status = 'active' AND user_id = %s
+                      AND metadata ? 'tags' AND jsonb_typeof(metadata->'tags') = 'array'
+                    UNION
+                    SELECT metadata->>'topic' AS tag
+                    FROM captures
+                    WHERE status = 'active' AND user_id = %s
+                      AND metadata->>'topic' IS NOT NULL AND metadata->>'topic' != ''
+                      AND NOT (metadata ? 'tags')
+                ) sub
+                WHERE tag IS NOT NULL AND tag != ''
+                ORDER BY 1
+                """,
+                (user_id, user_id),
+            )
+            return [row[0] for row in cur.fetchall()]
+
+
+def get_captures_by_tag(tag: str, user_id: str = "default") -> list[dict]:
+    """Return active captures that have the given tag (tags array OR legacy topic)."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT * FROM captures
+                WHERE status = 'active' AND user_id = %s
+                  AND (
+                    metadata->'tags' @> to_jsonb(%s::text)
+                    OR (NOT (metadata ? 'tags') AND LOWER(metadata->>'topic') = LOWER(%s))
+                  )
+                ORDER BY created_at DESC
+                """,
+                (user_id, tag, tag),
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def update_capture_tags(capture_id: int, tags: list[str]) -> None:
+    """Set the tags array on a capture. Also updates topic to tags[0] for backward compat."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            primary_topic = tags[0] if tags else None
+            cur.execute(
+                """
+                UPDATE captures
+                SET metadata = metadata
+                    || jsonb_build_object('tags', %s::jsonb, 'topic', %s::text)::jsonb,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (json.dumps(tags), primary_topic, capture_id),
+            )
+
+
+def get_backlinks(capture_id: int, user_id: str = "default", limit: int = 10) -> list[dict]:
+    """Return other active captures that share at least one tag with the given capture.
+    Ordered by number of shared tags descending, then by recency."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Get tags for the source capture (union of tags array + legacy topic)
+            cur.execute(
+                """
+                SELECT ARRAY(
+                    SELECT DISTINCT tag FROM (
+                        SELECT jsonb_array_elements_text(metadata->'tags') AS tag
+                        FROM captures WHERE id = %s
+                        UNION
+                        SELECT metadata->>'topic' AS tag
+                        FROM captures WHERE id = %s AND NOT (metadata ? 'tags')
+                    ) sub WHERE tag IS NOT NULL AND tag != ''
+                ) AS source_tags
+                """,
+                (capture_id, capture_id),
+            )
+            row = cur.fetchone()
+            if not row or not row["source_tags"]:
+                return []
+            source_tags = row["source_tags"]
+
+            # Find captures sharing at least one tag, ranked by overlap count
+            cur.execute(
+                """
+                WITH capture_tags AS (
+                    SELECT id,
+                        ARRAY(
+                            SELECT DISTINCT tag FROM (
+                                SELECT jsonb_array_elements_text(metadata->'tags') AS tag
+                                FROM captures c2 WHERE c2.id = captures.id
+                                UNION
+                                SELECT metadata->>'topic' AS tag
+                                FROM captures c3 WHERE c3.id = captures.id
+                                  AND NOT (metadata ? 'tags')
+                            ) sub WHERE tag IS NOT NULL AND tag != ''
+                        ) AS tags
+                    FROM captures
+                    WHERE status = 'active' AND user_id = %s AND id != %s
+                )
+                SELECT c.*, ct.tags AS shared_tags_arr,
+                    (SELECT COUNT(*) FROM unnest(ct.tags) t WHERE t = ANY(%s)) AS shared_count
+                FROM capture_tags ct
+                JOIN captures c ON c.id = ct.id
+                WHERE (SELECT COUNT(*) FROM unnest(ct.tags) t WHERE t = ANY(%s)) > 0
+                ORDER BY shared_count DESC, c.created_at DESC
+                LIMIT %s
+                """,
+                (user_id, capture_id, source_tags, source_tags, limit),
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
 
 
 def rename_topic(old_topic: str, new_topic: str) -> int:
@@ -774,6 +944,41 @@ def _compute_streak(capture_dates: list, today_str: str) -> int:
     return streak
 
 
+def get_profile(user_id: str) -> dict | None:
+    """Return public profile fields for a user."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, email, name, handle, bio, created_at FROM users WHERE id = %s",
+                (user_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def update_profile(user_id: str, name: str | None = None, bio: str | None = None) -> dict:
+    """Update name and/or bio for a user. Returns updated profile fields."""
+    updates = []
+    params: list = []
+    if name is not None:
+        updates.append("name = %s")
+        params.append(name.strip())
+    if bio is not None:
+        updates.append("bio = %s")
+        params.append(bio.strip() if bio.strip() else None)
+    if not updates:
+        return get_profile(user_id) or {}
+    params.append(user_id)
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"UPDATE users SET {', '.join(updates)} WHERE id = %s RETURNING id, email, name, handle, bio, created_at",
+                params,
+            )
+            row = cur.fetchone()
+            return dict(row) if row else {}
+
+
 def get_user_by_email(email: str) -> dict | None:
     """Fetch a user row by email."""
     with _get_conn() as conn:
@@ -962,6 +1167,79 @@ def clear_deleted() -> None:
     with _get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM captures WHERE status = 'deleted'")
+
+
+def get_entity_graph(user_id: str = "default") -> dict:
+    """Return nodes and edges for GraphRAG visualization.
+
+    Nodes: active captures (excluding inbox/query/calendar).
+    Links: pairs of captures sharing at least 1 entity, weighted by shared count.
+    """
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, summary, capture_type,
+                       metadata->>'topic' AS topic,
+                       COALESCE(
+                           CASE WHEN jsonb_typeof(metadata->'tags') = 'array'
+                                THEN metadata->'tags'
+                                ELSE NULL END,
+                           CASE WHEN metadata->>'topic' IS NOT NULL AND metadata->>'topic' != ''
+                                THEN jsonb_build_array(metadata->>'topic')
+                                ELSE '[]'::jsonb END
+                       ) AS tags,
+                       status
+                FROM captures
+                WHERE user_id = %s
+                  AND status NOT IN ('deleted')
+                  AND capture_type NOT IN ('inbox', 'query', 'calendar')
+                ORDER BY created_at DESC
+                LIMIT 300
+                """,
+                (user_id,),
+            )
+            captures = cur.fetchall()
+
+            if not captures:
+                return {"nodes": [], "links": []}
+
+            capture_ids = [c["id"] for c in captures]
+
+            cur.execute(
+                """
+                SELECT ce1.capture_id AS source,
+                       ce2.capture_id AS target,
+                       COUNT(*) AS weight
+                FROM capture_entities ce1
+                JOIN capture_entities ce2
+                     ON ce1.entity = ce2.entity
+                    AND ce1.capture_id < ce2.capture_id
+                WHERE ce1.capture_id = ANY(%s)
+                  AND ce2.capture_id = ANY(%s)
+                GROUP BY ce1.capture_id, ce2.capture_id
+                HAVING COUNT(*) >= 1
+                """,
+                (capture_ids, capture_ids),
+            )
+            edges = cur.fetchall()
+
+    nodes = [
+        {
+            "id": c["id"],
+            "summary": c["summary"],
+            "type": c["capture_type"],
+            "topic": c["topic"],
+            "tags": c["tags"] if isinstance(c["tags"], list) else [],
+            "status": c["status"],
+        }
+        for c in captures
+    ]
+    links = [
+        {"source": e["source"], "target": e["target"], "weight": int(e["weight"])}
+        for e in edges
+    ]
+    return {"nodes": nodes, "links": links}
 
 
 def _row_to_dict(row) -> dict:

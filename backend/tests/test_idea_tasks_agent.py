@@ -4,13 +4,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-@pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.storage.db.DB_PATH", tmp_path / "test.db")
-    from app.storage import db
-    db.init()
-    return db
-
 
 def _mock_client(response_json):
     content_block = MagicMock()

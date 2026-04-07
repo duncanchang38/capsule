@@ -3,6 +3,8 @@ import pytest
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+_NO_PAGE = (None, None)  # sentinel for _fetch_page_title returning nothing useful
+
 
 def _make_response(payload: dict) -> MagicMock:
     msg = MagicMock()
@@ -16,13 +18,6 @@ def mock_client(monkeypatch):
     monkeypatch.setattr("app.agents.to_learn_agent.client", mock)
     return mock
 
-
-@pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.storage.db.DB_PATH", tmp_path / "test.db")
-    from app.storage import db
-    db.init()
-    return db
 
 
 @pytest.mark.asyncio
@@ -100,8 +95,10 @@ async def test_enrich_merges_with_existing_metadata(mock_client, tmp_db):
         "url": "https://youtube.com/watch?v=abc",
     })
 
-    from app.agents.to_learn_agent import enrich_to_learn
-    await enrich_to_learn(row_id, "Watch this", existing_meta)
+    # Prevent real network calls to YouTube — the URL is fake and would race the mock
+    with patch("app.agents.to_learn_agent._fetch_page_title", return_value=_NO_PAGE):
+        from app.agents.to_learn_agent import enrich_to_learn
+        await enrich_to_learn(row_id, "Watch this", existing_meta)
 
     rows = tmp_db.get_recent()
     meta = rows[0]["metadata"]

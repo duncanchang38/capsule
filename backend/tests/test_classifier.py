@@ -146,12 +146,12 @@ async def test_classify_query(mock_bedrock):
 # ── Error handling ─────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_json_decode_error_returns_inbox_fallback(mock_bedrock):
-    """Non-JSON response → inbox fallback, no exception."""
+async def test_json_decode_error_returns_to_learn_fallback(mock_bedrock):
+    """Non-JSON response → to_learn fallback, no exception."""
     mock_bedrock.messages.create.return_value = _bad_response("Sorry, I can't help with that.")
     from app.agents.classifier import classify_intent
     result = await classify_intent("some input text")
-    assert result.capture_type == "inbox"
+    assert result.capture_type == "to_learn"
     assert result.confidence == 0.0
     assert result.summary == "some input text"
 

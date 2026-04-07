@@ -1,7 +1,6 @@
 """Tests for agents/query_agent.py — client always mocked."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from pathlib import Path
 
 
 def _make_response(text: str) -> MagicMock:
@@ -16,16 +15,6 @@ def mock_client(monkeypatch):
     monkeypatch.setattr("app.agents.query_agent.client", mock)
     return mock
 
-
-@pytest.fixture
-def seeded_db(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.storage.db.DB_PATH", tmp_path / "test.db")
-    from app.storage import db
-    db.init()
-    db.save_capture("to_hit", "archive", "Call dentist", "Call dentist", {})
-    db.save_capture("to_learn", "absorb", "Atomic Habits", "Read Atomic Habits", {"topic": "productivity"})
-    db.save_capture("calendar", "archive", "Lunch", "Lunch with Sarah", {}, deadline="2026-04-10")
-    return db
 
 
 @pytest.mark.asyncio

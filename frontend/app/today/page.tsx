@@ -9,6 +9,7 @@ import { useSelection } from "@/hooks/useSelection";
 import { clearDeleted, updateCaptureStatus, deferCapture as deferCaptureApi, scheduleCapture } from "@/lib/api";
 import { TYPE_CONFIG } from "@/lib/typeConfig";
 import { CaptureListRow, TypeBadge } from "@/components/CaptureListRow";
+import { CapturePreviewDrawer } from "@/components/CapturePreviewDrawer";
 import { SelectionToolbar } from "@/components/SelectionToolbar";
 import type { Capture } from "@/lib/api";
 import type { CaptureRowHandlers } from "@/components/CaptureListRow";
@@ -104,7 +105,6 @@ function TabBar({
   onChange: (id: TabId) => void;
   onSelect: () => void;
 }) {
-  const hasActivity = stats.captured_today > 0 || stats.completed_today > 0 || stats.deferred_today > 0;
   return (
     <div className="sticky top-0 z-20 bg-[#f7f5f0] border-b border-stone-100 -mx-4 px-4 mb-0">
       <div className="flex items-center gap-0 overflow-x-auto scrollbar-none">
@@ -133,13 +133,16 @@ function TabBar({
         })}
         <div className="ml-auto flex items-center gap-2 flex-shrink-0 pl-2">
           {stats.streak > 0 && (
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-500 font-medium border border-amber-100">
-              {stats.streak}d
+            <span className="flex items-center gap-0.5 text-amber-500" title={`${stats.streak}-day streak`}>
+              <svg width="11" height="12" viewBox="0 0 11 12" fill="currentColor" className="flex-shrink-0">
+                <path d="M5.5 0C5.5 0 3 2.5 3 5c0 .55.45 1 1 1s1-.45 1-1c0 0 1.5 1.5 1.5 3.5C6.5 9.88 6.01 11 5.5 12c2.5-.5 4-2.5 4-4.5 0-2-1-3.5-2-4.5 0 1-.5 2-1.5 2C5 5 5.5 2.5 5.5 0z"/>
+              </svg>
+              <span className="text-[10px] font-semibold tabular-nums">{stats.streak}</span>
             </span>
           )}
           <button
             onClick={onSelect}
-            className={`text-xs px-2.5 py-1 rounded-lg transition-colors ${
+            className={`text-xs px-2.5 py-1.5 rounded-lg transition-colors ${
               selecting ? "bg-stone-800 text-white" : "text-stone-400 hover:text-stone-700 hover:bg-stone-100"
             }`}
           >
@@ -147,27 +150,19 @@ function TabBar({
           </button>
         </div>
       </div>
-      {hasActivity && (
-        <div className="flex items-center gap-2 pb-1.5 text-[10px] text-stone-400">
-          {stats.captured_today > 0 && <span>{stats.captured_today} captured</span>}
-          {stats.captured_today > 0 && (stats.completed_today > 0 || stats.deferred_today > 0) && <span>·</span>}
-          {stats.completed_today > 0 && <span>{stats.completed_today} done</span>}
-          {stats.completed_today > 0 && stats.deferred_today > 0 && <span>·</span>}
-          {stats.deferred_today > 0 && <span>{stats.deferred_today} deferred</span>}
-        </div>
-      )}
     </div>
   );
 }
 
 export default function TodayPage() {
-  const { captures, setCaptures, loading, error, refresh, markDone, deleteCapture, deferCapture, planToday } = useCaptures();
+  const { captures, setCaptures, loading, error, refresh, markDone, deleteCapture, deferCapture, planToday, patchSummary } = useCaptures();
   const activityStats = useActivityStats();
   const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("schedule");
   const [clearConfirm, setClearConfirm] = useState<"idle" | "first" | "second">("idle");
   const [clearing, setClearing] = useState(false);
   const { selecting, selectedIds, toggle, selectAll, cancel: cancelSelection, startSelecting } = useSelection();
+  const [previewId, setPreviewId] = useState<number | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -371,7 +366,7 @@ export default function TodayPage() {
           <section>
             <div className="bg-white border border-red-100 rounded-xl px-4 py-1">
               {overdue.map((c) => (
-                <CaptureListRow key={c.id} capture={c} handlers={handlers} meta={snippet(c)} />
+                <CaptureListRow key={c.id} capture={c} handlers={handlers} meta={snippet(c)} onPreview={(cap) => setPreviewId(cap.id)} />
               ))}
             </div>
           </section>
@@ -381,7 +376,7 @@ export default function TodayPage() {
         {effectiveTab === "schedule" && (
           <section>
             {calendarToday.length === 0 && scheduledToday.length === 0 && pending.length === 0 ? (
-              <p className="text-sm text-stone-400 py-2">Nothing on for today</p>
+              <p className="text-sm text-stone-400 py-2">Nothing on for today.</p>
             ) : (
               <>
                 {/* Scheduled today */}
@@ -392,7 +387,8 @@ export default function TodayPage() {
                       {calendarToday.map((c) => <CalendarTodayRow key={c.id} capture={c} />)}
                       {scheduledToday.map((c) => (
                         <CaptureListRow key={c.id} capture={c} handlers={scheduledHandlers} meta={snippet(c)}
-                          selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle} />
+                          selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle}
+                          onPreview={(cap) => setPreviewId(cap.id)} />
                       ))}
                     </div>
                   </div>
@@ -405,7 +401,8 @@ export default function TodayPage() {
                     <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
                       {pending.map((c) => (
                         <CaptureListRow key={c.id} capture={c} handlers={handlers} meta={snippet(c)}
-                          selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle} />
+                          selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle}
+                          onPreview={(cap) => setPreviewId(cap.id)} />
                       ))}
                     </div>
                   </div>
@@ -429,6 +426,7 @@ export default function TodayPage() {
                   <CaptureListRow
                     key={c.id} capture={c} handlers={handlers} dimmed
                     selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle}
+                    onPreview={(cap) => setPreviewId(cap.id)}
                     meta={
                       (c.metadata?.deferred_to as string | undefined)
                         ? <p className="text-[10px] text-stone-400 mt-0.5">until {c.metadata?.deferred_to as string}</p>
@@ -447,7 +445,8 @@ export default function TodayPage() {
             <div className="bg-white border border-[#e8e4db] rounded-xl px-4 py-1">
               {capturedToday.map((c) => (
                 <CaptureListRow key={c.id} capture={c} handlers={handlers} meta={snippet(c)}
-                  selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle} />
+                  selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle}
+                  onPreview={(cap) => setPreviewId(cap.id)} />
               ))}
             </div>
           </section>
@@ -478,6 +477,7 @@ export default function TodayPage() {
                     <CaptureListRow
                       key={c.id} capture={c}
                       selecting={selecting} selected={selectedIds.has(c.id)} onSelect={toggle}
+                      onPreview={(cap) => setPreviewId(cap.id)}
                       rightExtras={
                         <div className="flex items-center gap-1.5 flex-shrink-0">
                           {c.notes && <span className="text-[10px] text-stone-300" title="Has notes">✦</span>}
@@ -559,6 +559,7 @@ export default function TodayPage() {
         onDefer={effectiveTab !== "archive" ? handleBulkDefer : undefined}
       />
     )}
+    <CapturePreviewDrawer captureId={previewId} onClose={() => setPreviewId(null)} onSummaryChange={patchSummary} />
     </>
   );
 }

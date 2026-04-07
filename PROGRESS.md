@@ -235,6 +235,17 @@ capsule/
 
 ## Session Log
 
+### 2026-04-08
+**Completed:**
+- **`redirect_slashes=False` deployed to Railway** — FastAPI was issuing 307 redirects with `http://` Location headers (Railway terminates TLS before the container, so FastAPI only sees plain HTTP internally). Browser refused the mixed-content redirect. Fix: `app = FastAPI(lifespan=lifespan, redirect_slashes=False)` in `main.py`, deployed via `railway up` from `capsule/backend/`.
+- **`middleware.ts` → `proxy.ts`** — renamed to fix Next.js deprecation warning ("middleware file convention deprecated, use proxy instead").
+- **`.railwayignore`** — created at repo root to prevent `railway up` from uploading `node_modules`, `.venv`, `__pycache__`, etc.
+- **Railway `rootDirectory` cleared** — was set to `capsule/backend`, which broke `railway up` uploads (archive didn't contain that path prefix). Cleared to empty via GraphQL API so uploads from `capsule/backend/` work correctly.
+
+**Pending:**
+- Verify 307 is resolved once Railway deploy completes
+- RESEND_API_KEY + APP_URL still not set on Railway (forgot-password broken)
+
 ### 2026-04-07
 **Completed:**
 - **AI suggest title bug fix** — `handleAcceptTitle` in `CapturePreviewDrawer` was calling `setCapture({ ...prev, summary: title })` without updating `notes`. This triggered the `useEffect([capture])` which called `buildEditorContent(staleNotes, newTitle)` — since the old notes had a real H1, it returned the old HTML and reverted the editor, then the 800ms debounce saved the old title back to DB. Fix: also pass `notes: newHtml` in `setCapture` so the effect gets consistent state.

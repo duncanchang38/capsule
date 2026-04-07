@@ -386,7 +386,7 @@ export default function CalendarPage() {
 
   return (
     <>
-      <div className="flex h-[calc(100vh-45px)] bg-white">
+      <div className="flex h-[calc(100vh-45px)] bg-[#f7f5f0]">
 
         {/* ── Sidebar ── */}
         <div className="w-[220px] flex-shrink-0 border-r border-zinc-100 flex flex-col overflow-y-auto">

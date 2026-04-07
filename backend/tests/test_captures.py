@@ -1,37 +1,29 @@
-"""Tests for routes/captures.py — uses tmp SQLite via monkeypatch."""
+"""Tests for routes/captures.py — uses PostgreSQL test DB via conftest.tmp_db."""
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
-from pathlib import Path
+
+# All API test requests run as this user. Captures are seeded with the same ID
+# so ownership checks pass correctly.
+TEST_USER = "test-user-001"
+AUTH_HEADERS = {"x-user-id": TEST_USER}
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.storage.db.DB_PATH", tmp_path / "test.db")
-    from app.storage import db as _db
-    _db.init()
+def client(tmp_db):
     from app.main import app
-    return TestClient(app)
-
-
-def _seed(tmp_path, monkeypatch):
-    """Return a seeded db helper; must be called before client fixture uses db."""
-    pass
+    return TestClient(app, headers=AUTH_HEADERS)
 
 
 @pytest.fixture
-def seeded_client(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.storage.db.DB_PATH", tmp_path / "test.db")
-    from app.storage import db as _db
-    _db.init()
-    _db.save_capture("to_hit", "archive", "task1", "Task 1", {})
-    _db.save_capture("to_learn", "absorb", "article", "Article 1", {})
-    _db.save_capture("to_cook", "persist", "idea", "Idea 1", {})
-    _db.save_capture("calendar", "archive", "event1", "Event 1", {}, deadline="2026-04-10")
-    _db.save_capture("calendar", "archive", "event2", "Event 2", {}, deadline="2026-04-05")
-    _db.save_capture("inbox", "inbox", "unclear", "Unclear", {})
+def seeded_client(tmp_db):
+    tmp_db.save_capture("to_hit", "archive", "task1", "Task 1", {}, user_id=TEST_USER)
+    tmp_db.save_capture("to_learn", "absorb", "article", "Article 1", {}, user_id=TEST_USER)
+    tmp_db.save_capture("to_cook", "persist", "idea", "Idea 1", {}, user_id=TEST_USER)
+    tmp_db.save_capture("calendar", "archive", "event1", "Event 1", {}, deadline="2026-04-10", user_id=TEST_USER)
+    tmp_db.save_capture("calendar", "archive", "event2", "Event 2", {}, deadline="2026-04-05", user_id=TEST_USER)
+    tmp_db.save_capture("inbox", "inbox", "unclear", "Unclear", {}, user_id=TEST_USER)
     from app.main import app
-    return TestClient(app)
+    return TestClient(app, headers=AUTH_HEADERS)
 
 
 def test_get_captures_no_param(seeded_client):
@@ -64,17 +56,16 @@ def test_get_captures_view_calendar(seeded_client):
     assert data[1]["deadline"] == "2026-04-10"
 
 
-def test_patch_status(seeded_client, tmp_path, monkeypatch):
-    monkeypatch.setattr("app.storage.db.DB_PATH", tmp_path / "test.db")
+def test_patch_status(seeded_client):
     from app.storage import db as _db
-    rows = _db.get_recent()
+    rows = _db.get_recent(user_id=TEST_USER)
     row_id = rows[0]["id"]
 
     resp = seeded_client.patch(f"/captures/{row_id}/status", json={"status": "archived"})
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
 
-    updated = _db.get_recent()
+    updated = _db.get_recent(user_id=TEST_USER)
     match = next(r for r in updated if r["id"] == row_id)
     assert match["status"] == "archived"
 
@@ -85,10 +76,9 @@ def test_patch_status_missing_body(seeded_client):
     assert resp.json() == {"error": "status required"}
 
 
-def test_patch_stage_updates_metadata(seeded_client, tmp_path, monkeypatch):
-    monkeypatch.setattr("app.storage.db.DB_PATH", tmp_path / "test.db")
+def test_patch_stage_updates_metadata(seeded_client):
     from app.storage import db as _db
-    idea_id = _db.save_capture("to_cook", "persist", "An idea", "An idea", {"stage": "seed"})
+    idea_id = _db.save_capture("to_cook", "persist", "An idea", "An idea", {"stage": "seed"}, user_id=TEST_USER)
 
     resp = seeded_client.patch(f"/captures/{idea_id}/stage", json={"stage": "brewing"})
     assert resp.status_code == 200
@@ -110,10 +100,9 @@ def test_patch_stage_not_found(seeded_client):
     assert resp.status_code == 404
 
 
-def test_post_tasks_non_cook_returns_error(seeded_client, tmp_path, monkeypatch):
-    monkeypatch.setattr("app.storage.db.DB_PATH", tmp_path / "test.db")
+def test_post_tasks_non_cook_returns_error(seeded_client):
     from app.storage import db as _db
-    task_id = _db.save_capture("to_hit", "archive", "a task", "A task", {})
+    task_id = _db.save_capture("to_hit", "archive", "a task", "A task", {}, user_id=TEST_USER)
     resp = seeded_client.post(f"/captures/{task_id}/tasks")
     assert resp.status_code == 200
     assert "error" in resp.json()

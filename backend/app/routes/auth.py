@@ -1,6 +1,7 @@
 import logging
 import os
 from fastapi import APIRouter, HTTPException
+from app.auth.deps import CurrentUser
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -96,7 +97,7 @@ async def login(body: dict):
 
 
 @router.patch("/auth/handle")
-async def change_handle(body: dict):
+async def change_handle(body: dict, user_id: CurrentUser):
     """Change the authenticated user's handle.
 
     Rate-limited: once every 14 days.
@@ -104,11 +105,8 @@ async def change_handle(body: dict):
     """
     from app.storage import db
 
-    user_id = (body.get("user_id") or "").strip()
     new_handle = (body.get("handle") or "").strip()
 
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
     if not new_handle:
         raise HTTPException(status_code=400, detail="handle is required")
 
@@ -180,6 +178,60 @@ async def forgot_password(body: dict):
         except Exception:
             logger.exception("failed to send reset email to %s", email)
 
+    return {"ok": True}
+
+
+@router.get("/auth/profile")
+async def get_profile(user_id: CurrentUser):
+    """Return the authenticated user's profile."""
+    from app.storage import db
+    profile = db.get_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="user not found")
+    return profile
+
+
+@router.patch("/auth/profile")
+async def update_profile(body: dict, user_id: CurrentUser):
+    """Update name and/or bio for the authenticated user."""
+    from app.storage import db
+    name = body.get("name")
+    bio = body.get("bio")
+    # At least one field must be present
+    if name is None and bio is None:
+        raise HTTPException(status_code=400, detail="provide name or bio to update")
+    updated = db.update_profile(user_id, name=name, bio=bio)
+    return updated
+
+
+@router.patch("/auth/password")
+async def change_password(body: dict, user_id: CurrentUser):
+    """Change the authenticated user's password."""
+    import bcrypt
+    from app.storage import db
+
+    current = body.get("current_password") or ""
+    new_pw = body.get("new_password") or ""
+
+    if not current or not new_pw:
+        raise HTTPException(status_code=400, detail="current_password and new_password are required")
+    if len(new_pw) < 8:
+        raise HTTPException(status_code=400, detail="password must be at least 8 characters")
+
+    user = db.get_profile(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    # Re-fetch with password hash
+    full_user = db.get_user_by_email(user["email"])
+    if not full_user:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    if not bcrypt.checkpw(current.encode(), full_user["password_hash"].encode()):
+        raise HTTPException(status_code=400, detail="current password is incorrect")
+
+    new_hash = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
+    db.update_password(user_id, new_hash)
     return {"ok": True}
 
 

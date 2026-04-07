@@ -78,7 +78,7 @@
 .fc .fc-col-header-cell {
   padding: 6px 0 5px 0;
   border-color: #f0f0ef !important;
-  background: #ffffff;
+  background: #f7f5f0;
 }
 .fc .fc-col-header-cell-cushion {
   font-size: 0.68rem;
@@ -121,6 +121,15 @@
 }
 .fc .fc-timegrid-slot-lane {
   border-color: #f5f5f3 !important;
+}
+
+/* ── Cell background — warm stone to match app background ─────────────── */
+.fc .fc-timegrid-col-frame,
+.fc .fc-daygrid-day-frame,
+.fc .fc-timegrid-slots td,
+.fc .fc-daygrid-body,
+.fc .fc-view-harness {
+  background: #f7f5f0 !important;
 }
 
 /* ── Grid borders ──────────────────────────────────────────────────────── */

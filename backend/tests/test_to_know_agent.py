@@ -1,11 +1,14 @@
 """Tests for agents/to_know_agent.py — client always mocked."""
+import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 
-def _make_response(text: str) -> MagicMock:
+def _make_response(answer: str, search_queries: list | None = None) -> MagicMock:
+    """Return a mock Anthropic message with the JSON format to_know_agent expects."""
+    payload = {"answer": answer, "search_queries": search_queries or []}
     msg = MagicMock()
-    msg.content = [MagicMock(text=text)]
+    msg.content = [MagicMock(text=json.dumps(payload))]
     return msg
 
 
@@ -16,20 +19,13 @@ def mock_client(monkeypatch):
     return mock
 
 
-@pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.storage.db.DB_PATH", tmp_path / "test.db")
-    from app.storage import db
-    db.init()
-    return db
-
-
 @pytest.mark.asyncio
 async def test_research_stores_answer(mock_client, tmp_db):
     row_id = tmp_db.save_capture("to_know", "answer", "How does compound interest work?",
                                   "How does compound interest work?", {"question": "How does compound interest work?"})
     mock_client.messages.create.return_value = _make_response(
-        "Compound interest earns interest on both the principal and previously earned interest."
+        "Compound interest earns interest on both the principal and previously earned interest.",
+        ["compound interest explained", "compound vs simple interest", "compound interest calculator"],
     )
 
     from app.agents.to_know_agent import research_to_know
@@ -44,7 +40,9 @@ async def test_research_stores_answer(mock_client, tmp_db):
 async def test_research_merges_existing_metadata(mock_client, tmp_db):
     meta = {"question": "What is a Roth IRA?", "topic": "finance"}
     row_id = tmp_db.save_capture("to_know", "answer", "What is a Roth IRA?", "What is a Roth IRA?", meta)
-    mock_client.messages.create.return_value = _make_response("A Roth IRA is a tax-advantaged retirement account.")
+    mock_client.messages.create.return_value = _make_response(
+        "A Roth IRA is a tax-advantaged retirement account.",
+    )
 
     from app.agents.to_know_agent import research_to_know
     await research_to_know(row_id, "What is a Roth IRA?", meta)
@@ -70,7 +68,7 @@ async def test_research_handles_error_gracefully(mock_client, tmp_db):
 @pytest.mark.asyncio
 async def test_research_answer_is_trimmed(mock_client, tmp_db):
     row_id = tmp_db.save_capture("to_know", "answer", "Q", "Q", {})
-    mock_client.messages.create.return_value = _make_response("  The answer.  \n")
+    mock_client.messages.create.return_value = _make_response("  The answer.  ")
 
     from app.agents.to_know_agent import research_to_know
     await research_to_know(row_id, "Q", {})
